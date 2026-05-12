@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+
+from codeseam.adapters.languages import default_language_registry
+from codeseam.adapters.languages.extraction import (
+    FileAnalysisResult,
+    analyze_language_file,
+    language_context,
+)
+from codeseam.analysis import PolicyConstant, RepositoryFacts
+from codeseam.cache import AnalysisCacheContext, CacheWriteBuffer
+from codeseam.config import Config
+
+
+@dataclass(frozen=True)
+class RepositoryFileAnalysis:
+    by_path: dict[str, FileAnalysisResult]
+    policy_constants: tuple[PolicyConstant, ...]
+
+
+def analyze_selected_files(
+    config: Config,
+    facts: RepositoryFacts,
+    caches: AnalysisCacheContext | None,
+) -> RepositoryFileAnalysis:
+    registry = default_language_registry()
+    active_caches = replace(caches, write_buffer=CacheWriteBuffer()) if caches is not None else None
+    run_cache = active_caches.language if active_caches else None
+    by_path: dict[str, FileAnalysisResult] = {}
+    policy_constants: list[PolicyConstant] = []
+    for relative_path in facts.selected_paths:
+        file_record = facts.records_by_path[relative_path]
+        context = language_context(config.repo_root, relative_path, file_record, run_cache)
+        result = analyze_language_file(context, file_record, registry, active_caches)
+        by_path[relative_path] = result
+        policy_constants.extend(result.policy_constants)
+    if active_caches is not None:
+        active_caches.flush()
+    return RepositoryFileAnalysis(
+        by_path=by_path,
+        policy_constants=tuple(policy_constants),
+    )
+
+
+__all__ = ["RepositoryFileAnalysis", "analyze_selected_files"]

@@ -1,0 +1,23 @@
+[project]
+repo_root = "auto"
+
+[output]
+root = ".codeseam/reports"
+
+[selection]
+include = ["**/*"]
+exclude = []
+
+[agent_summary]
+# 0 means include all listed actionable targets.
+max_targets = 0
+
+[cache]
+enabled = true
+path = ".codeseam/cache"
+
+[relations]
+split_test = true
+
+[semantics]
+mode = "off"

@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "strict": true,
+    "target": "ES2020"
+  },
+  "files": ["src/user.ts", "src/project.ts", "src/user_reader.ts", "src/project_reader.ts"]
+}

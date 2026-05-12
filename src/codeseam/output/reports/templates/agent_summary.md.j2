@@ -1,0 +1,59 @@
+# Codeseam Agent Audit Summary
+
+## Executive Summary
+- Internal findings: {{ metrics.internal_finding_count|md_text }}
+- Analysis targets: {{ metrics.analysis_target_count|md_text }}
+- Observations: {{ metrics.observation_count|md_text }}
+- Recommended-edit tier: {{ metrics.recommended_edit_tier_count|md_text }}
+- Recommended edits: {{ metrics.recommended_edit_count|md_text }}
+- Targets by review tier: {{ summary.targets_by_review_tier|md_json }}
+- Targets by action status: {{ summary.targets_by_action_status|md_json }}
+- Listed targets: {{ listed_target_count|md_text }}{% if omitted_target_count %}; omitted by config: {{ omitted_target_count|md_text }}{% endif %}
+
+## Agent-Visible Review Targets
+{% if not agent_targets %}
+- No agent-visible review targets were generated.
+{% else %}
+{% for target in agent_targets %}
+{{ target.index|md_text }}. {{ target.target_id|md_code }} - {{ target.title|md_text }}
+   - Review tier: {{ target.review_tier|md_code }}; action status: {{ target.action_status|md_code }}; primary action: {{ target.primary_action|md_code }}; visibility: {{ target.visibility|md_code }}; lifecycle: {{ target.lifecycle_state|md_code }}; score: {{ target.review_score|md_code }}; detection confidence: {{ target.detection_confidence|md_code }}; recommendation confidence: {{ target.recommendation_confidence|md_code }}
+   - Evidence: {{ target.evidence_line|md_code }}
+   - Scores: {{ target.score_line|md_code }}
+{% if target.reason %}
+   - Reason: {{ target.reason|md_text }}
+{% endif %}
+   - Suggested action: {{ target.action_line|md_text }}
+{% if target.do_not_line %}
+   - Do not: {{ target.do_not_line|md_code }}
+{% endif %}
+{% if target.files_line %}
+   - Files: {{ target.files_line|md_code }}
+{% endif %}
+   - Inspect: {{ target.inspect_command|md_code }}
+{{ "" }}
+{% endfor %}
+{% endif %}
+
+{% if weak_recurrence_families %}
+## Grouped Weak Recurrence Families
+Weak recurrence families hidden from action summary:
+{% for family in weak_recurrence_families %}
+- {{ family.label|md_text }}: {{ family.cluster_count|md_text }} {{ family.cluster_word|md_text }}
+{% for example in family.examples %}
+  - Example: {{ example.target_id|md_code }} - {{ example.title|md_text }} ({{ example.review_tier|md_code }}, score {{ example.review_score|md_code }})
+{% endfor %}
+{% endfor %}
+
+{% endif %}
+
+## Guardrails
+{% for guardrail in guardrails %}
+- {{ guardrail|md_text }}
+{% endfor %}
+
+## Sidecars
+- Prefer `codeseam explain <id>` for full detail on one selected target.
+- Do not read full JSONL sidecars by default; they are for scripts and filtered lookup.
+- `agent/analysis.jsonl` contains compact non-observation analysis records.
+- `agent/observations.jsonl` contains observation records only.
+- `agent/metrics.json` contains aggregate counts and artifact references.

@@ -1,0 +1,12 @@
+from __future__ import annotations
+
+EVIDENCE_KIND_SIGNATURE_CLUSTER = "signature_cluster"
+EVIDENCE_KIND_POLICY_CONSTANT_CLUSTER = "policy_constant_cluster"
+
+EVIDENCE_OVERLAP_POLICY_CONSTANT = "policy_constant_clusters"
+
+__all__ = [
+    "EVIDENCE_KIND_POLICY_CONSTANT_CLUSTER",
+    "EVIDENCE_KIND_SIGNATURE_CLUSTER",
+    "EVIDENCE_OVERLAP_POLICY_CONSTANT",
+]

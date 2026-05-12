@@ -1,0 +1,4 @@
+# Add project-specific paths to exclude from Codeseam analysis.
+# Examples:
+# generated/**
+# vendor/**

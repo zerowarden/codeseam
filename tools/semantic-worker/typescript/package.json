@@ -1,0 +1,21 @@
+{
+  "name": "codeseam-typescript-semantic-worker",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "TypeScript semantic worker for Codeseam",
+  "bin": {
+    "codeseam-typescript-semantic-worker": "src/main.mjs"
+  },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "format": "prettier --write \"src/**/*.mjs\"",
+    "format:check": "prettier --check \"src/**/*.mjs\""
+  },
+  "devDependencies": {
+    "prettier": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
