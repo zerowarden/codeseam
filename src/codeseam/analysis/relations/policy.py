@@ -61,6 +61,14 @@ class StructuralPolicy:
         default=0.9,
         metadata={"doc": "Tree similarity needed to classify a strong structural duplicate."},
     )
+    min_statement_lcs_length: int = field(
+        default=2,
+        metadata={"doc": "Minimum aligned statements before LCS is meaningful evidence."},
+    )
+    min_stable_statement_count: int = field(
+        default=2,
+        metadata={"doc": "Minimum stable statements before anti-unification is meaningful."},
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +134,10 @@ class PairPolicy:
     parameter_flow_threshold: float = field(
         default=0.85,
         metadata={"doc": "Parameter-use similarity treated as matching argument flow."},
+    )
+    call_fingerprint_threshold: float = field(
+        default=0.65,
+        metadata={"doc": "Call multiset similarity treated as meaningful call overlap."},
     )
     min_wrapper_stable_edge_count: int = field(
         default=3,

@@ -165,6 +165,10 @@ class PolicyConstant:
     literal_shape_hash: str
     literal_preview: str
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "start_line", _line_number(self.start_line, default=1))
+        object.__setattr__(self, "end_line", _line_number(self.end_line, default=self.start_line))
+
 
 @dataclass(slots=True)
 class SignatureRecord:
@@ -445,6 +449,15 @@ def _signature_type_source(value: object) -> SignatureTypeSource:
         return SignatureTypeSource.UNKNOWN
 
 
+def _line_number(value: object, *, default: int) -> int:
+    if not isinstance(value, int | str):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _graph_features(graph: DataflowGraph) -> set[str]:
     features = {f"node:{node.kind}:{node.label}" for node in graph.nodes}
     features.update(
@@ -461,7 +474,9 @@ def _literal_shapes(
     shapes = {value for value in default_roles.values() if value.startswith("CONST_")}
     for call in calls:
         shapes.update(value for value in call.arg_roles if value.startswith("CONST_"))
-        shapes.update(value for value in _kwarg_shape_values(call) if value.startswith("CONST_"))
+        shapes.update(
+            value for value in call_kwarg_shape_values(call) if value.startswith("CONST_")
+        )
     return shapes
 
 
@@ -494,7 +509,7 @@ def _normalization_transform_tokens(calls: tuple[CallFingerprint, ...]) -> set[s
             continue
         if not _all_constant_roles(call.arg_roles):
             continue
-        if not _all_constant_roles(_kwarg_shape_values(call)):
+        if not _all_constant_roles(call_kwarg_shape_values(call)):
             continue
         callee = "_".join(item for item in call.callee_shape.name_tokens if item)
         if callee in NORMALIZATION_TRANSFORM_METHODS and call.token:
@@ -502,7 +517,7 @@ def _normalization_transform_tokens(calls: tuple[CallFingerprint, ...]) -> set[s
     return tokens
 
 
-def _kwarg_shape_values(call: CallFingerprint) -> tuple[str, ...]:
+def call_kwarg_shape_values(call: CallFingerprint) -> tuple[str, ...]:
     return tuple(value for _, value in call.kwarg_shape)
 
 
@@ -531,6 +546,7 @@ __all__ = [
     "CallFingerprint",
     "CalleeShape",
     "CallsitePattern",
+    "call_kwarg_shape_values",
     "DataflowEdge",
     "DataflowGraph",
     "DataflowNode",

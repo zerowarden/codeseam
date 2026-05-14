@@ -84,10 +84,11 @@ def _cache_items[T](value: object, item_type: type[T]) -> list[T] | None:
         return None
     if not all(isinstance(item, item_type) for item in value):
         return None
-    return [_with_dataclass_defaults(item, item_type) for item in value]
+    items = [_with_dataclass_defaults(item, item_type) for item in value]
+    return None if any(item is None for item in items) else cast("list[T]", items)
 
 
-def _with_dataclass_defaults[T](item: T, item_type: type[T]) -> T:
+def _with_dataclass_defaults[T](item: T, item_type: type[T]) -> T | None:
     """Rehydrate old cached dataclasses after optional fields are added."""
 
     if not hasattr(item_type, "__dataclass_fields__"):
@@ -101,7 +102,7 @@ def _with_dataclass_defaults[T](item: T, item_type: type[T]) -> T:
         elif field.default_factory is not MISSING:
             values[field.name] = cast("Any", field.default_factory)()
         else:
-            return item
+            return None
     return item_type(**values)
 
 

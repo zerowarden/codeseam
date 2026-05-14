@@ -8,7 +8,7 @@ from codeseam.analysis.relations.models import (
     MemberFeatures,
     MemberInput,
 )
-from codeseam.analysis.signatures import CallFingerprint
+from codeseam.analysis.signatures import CallFingerprint, call_kwarg_shape_values
 from codeseam.platform import text
 
 NORMALIZATION_TRANSFORM_METHODS = {"decode", "encode"}
@@ -127,7 +127,7 @@ def _arg_roles(call: CallFingerprint) -> tuple[str, ...]:
 
 
 def _kwarg_roles(call: CallFingerprint) -> tuple[str, ...]:
-    return tuple(value for _, value in call.kwarg_shape)
+    return call_kwarg_shape_values(call)
 
 
 def _token(call: CallFingerprint) -> str:

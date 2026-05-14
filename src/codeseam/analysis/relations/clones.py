@@ -13,20 +13,24 @@ from codeseam.analysis.relations.policy import (
     STRUCTURAL_POLICY,
 )
 
-EXTRACT_REGION_RELATIONS = {
-    RelationKind.COMMON_PREFIX_DIVERGENT_TAIL,
-    RelationKind.COMMON_SUFFIX_DIVERGENT_SETUP,
-    RelationKind.SAME_CORE_DIFFERENT_WRAPPER,
-}
+type CloneMetadata = tuple[CloneClass, str]
 
-RELATION_CLONE_METADATA = {
+EXTRACT_REGION_RELATIONS: frozenset[RelationKind] = frozenset(
+    {
+        RelationKind.COMMON_PREFIX_DIVERGENT_TAIL,
+        RelationKind.COMMON_SUFFIX_DIVERGENT_SETUP,
+        RelationKind.SAME_CORE_DIFFERENT_WRAPPER,
+    }
+)
+
+RELATION_CLONE_METADATA: dict[RelationKind, CloneMetadata] = {
+    RelationKind.NONE: (
+        CloneClass.SIGNATURE_SIGNAL_ONLY,
+        "boundary_only",
+    ),
     RelationKind.BODY_IDENTICAL: (
         CloneClass.TYPE_1_EXACT,
         "exact_normalized_body",
-    ),
-    RelationKind.ARGUMENT_NORMALIZATION_WRAPPER: (
-        CloneClass.TYPE_3_NEAR_MISS,
-        "typed_argument_normalization_wrapper",
     ),
     RelationKind.BODY_PARAMETERIZED: (
         CloneClass.TYPE_2_PARAMETERIZED,
@@ -36,6 +40,30 @@ RELATION_CLONE_METADATA = {
         CloneClass.TYPE_2_PARAMETERIZED,
         "parameterized_normalized_body",
     ),
+    RelationKind.ARGUMENT_NORMALIZATION_WRAPPER: (
+        CloneClass.TYPE_3_NEAR_MISS,
+        "typed_argument_normalization_wrapper",
+    ),
+    RelationKind.SAME_SKELETON_DIFFERENT_CALLEES: (
+        CloneClass.TYPE_3_NEAR_MISS,
+        "same_skeleton_different_callees",
+    ),
+    RelationKind.COMMON_PREFIX_DIVERGENT_TAIL: (
+        CloneClass.TYPE_3_NEAR_MISS,
+        "common_prefix_divergent_tail",
+    ),
+    RelationKind.COMMON_SUFFIX_DIVERGENT_SETUP: (
+        CloneClass.TYPE_3_NEAR_MISS,
+        "common_suffix_divergent_setup",
+    ),
+    RelationKind.COMMON_WRAPPER_DIFFERENT_CORE: (
+        CloneClass.TYPE_3_NEAR_MISS,
+        "common_wrapper_different_core",
+    ),
+    RelationKind.SAME_CORE_DIFFERENT_WRAPPER: (
+        CloneClass.TYPE_3_NEAR_MISS,
+        "same_core_different_wrapper",
+    ),
     RelationKind.SAME_ARGUMENT_FLOW_DIFFERENT_CONTROL: (
         CloneClass.CONTRACT_ANALOGY,
         "contract_analogy",
@@ -44,18 +72,14 @@ RELATION_CLONE_METADATA = {
         CloneClass.CONTRACT_ANALOGY,
         "contract_analogy",
     ),
-    RelationKind.NONE: (
-        CloneClass.SIGNATURE_SIGNAL_ONLY,
-        "boundary_only",
-    ),
 }
-DEFAULT_CLONE_METADATA = (
-    CloneClass.TYPE_3_NEAR_MISS,
-    "near_miss_skeleton",
+DEFAULT_CLONE_METADATA: CloneMetadata = (
+    CloneClass.SIGNATURE_SIGNAL_ONLY,
+    "unclassified_relation",
 )
 
 
-def clone_metadata(relation_kind: RelationKind) -> tuple[CloneClass, str]:
+def clone_metadata(relation_kind: RelationKind) -> CloneMetadata:
     return RELATION_CLONE_METADATA.get(relation_kind, DEFAULT_CLONE_METADATA)
 
 
@@ -70,7 +94,7 @@ def clone_classification_for(context: CloneClassificationInput) -> CloneClassifi
             context.refactorability,
             context.abstraction_cost,
         ),
-        basis=tuple(clone_basis_for(context)),
+        basis=clone_basis_for(context),
     )
 
 
@@ -81,18 +105,18 @@ def default_action(
     abstraction_cost: float,
 ) -> ActionKind:
     action = ActionKind.RECORD_SHARED_CONCERN
-    if clone_type in {CloneClass.TYPE_1_EXACT, CloneClass.TYPE_2_PARAMETERIZED}:
-        action = ActionKind.CONSOLIDATE_CLONE
-    elif clone_type == CloneClass.SIGNATURE_SIGNAL_ONLY:
+    if clone_type == CloneClass.SIGNATURE_SIGNAL_ONLY:
         action = ActionKind.OBSERVE
     elif clone_type == CloneClass.CONTRACT_ANALOGY:
         action = ActionKind.RECORD_SHARED_CONCERN
-    elif relation_kind is RelationKind.ARGUMENT_NORMALIZATION_WRAPPER:
-        action = ActionKind.REUSE_EXISTING_HELPER
     elif abstraction_cost >= RELATION_ASSESSMENT_POLICY.high_abstraction_cost_threshold:
         action = ActionKind.RECORD_SHARED_CONCERN
+    elif relation_kind == RelationKind.ARGUMENT_NORMALIZATION_WRAPPER:
+        action = ActionKind.REUSE_EXISTING_HELPER
+    elif clone_type in {CloneClass.TYPE_1_EXACT, CloneClass.TYPE_2_PARAMETERIZED}:
+        action = ActionKind.CONSOLIDATE_CLONE
     elif (
-        relation_kind is RelationKind.COMMON_WRAPPER_DIFFERENT_CORE
+        relation_kind == RelationKind.COMMON_WRAPPER_DIFFERENT_CORE
         and refactorability >= RELATION_ASSESSMENT_POLICY.refactorability_medium_threshold
     ):
         action = ActionKind.INTRODUCE_ABSTRACTION
@@ -101,11 +125,11 @@ def default_action(
     return action
 
 
-def clone_basis_for(context: CloneClassificationInput) -> list[str]:
-    basis = []
+def clone_basis_for(context: CloneClassificationInput) -> tuple[str, ...]:
+    basis: list[str] = []
     if context.flags.same_signature_shape:
         basis.append("same_signature_shape")
-    if context.argument_normalization:
+    if context.argument_normalization.is_detected:
         basis.append("typed_argument_normalization_wrapper")
     if context.flags.body_hash_match:
         basis.append("normalized_body_identity")
@@ -118,12 +142,15 @@ def clone_basis_for(context: CloneClassificationInput) -> list[str]:
         basis.append("body_tree_similarity")
     if context.parameter_similarity >= PAIR_POLICY.parameter_flow_threshold:
         basis.append("parameter_use_similarity")
-    if context.call_similarity > 0:
+    if context.call_similarity >= PAIR_POLICY.call_fingerprint_threshold:
         basis.append("call_fingerprint_overlap")
-    if context.sequence.lcs_length:
+    if context.sequence.lcs_length >= STRUCTURAL_POLICY.min_statement_lcs_length:
         basis.append("statement_sequence_alignment")
-    if context.anti_unification.stable_statement_count:
+    if (
+        context.anti_unification.stable_statement_count
+        >= STRUCTURAL_POLICY.min_stable_statement_count
+    ):
         basis.append("anti_unification_template")
     if context.deltas:
         basis.append("structural_delta_classification")
-    return sorted(set(basis))
+    return tuple(dict.fromkeys(basis))

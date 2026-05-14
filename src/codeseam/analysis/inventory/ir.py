@@ -87,9 +87,7 @@ def signature_shape(function: FunctionIR) -> SignatureShape:
         canonical_shape=shape,
         shape_hash=shape_hash,
         type_source=(
-            SignatureTypeSource.FALLBACK
-            if missing_types
-            else SignatureTypeSource.DECLARED_SYNTAX
+            SignatureTypeSource.FALLBACK if missing_types else SignatureTypeSource.DECLARED_SYNTAX
         ),
         caveats=caveats,
     )

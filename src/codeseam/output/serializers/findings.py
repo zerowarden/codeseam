@@ -298,9 +298,7 @@ def semantic_evidence_metrics_payload(metrics: SemanticEvidenceMetrics) -> Json:
 
 
 type MetricsDataclass = FindingMetrics | SemanticEvidenceMetrics
-type MetricValue = (
-    str | StrEnum | int | float | tuple[str, ...] | dict[str, int] | Json | None
-)
+type MetricValue = str | StrEnum | int | float | tuple[str, ...] | dict[str, int] | Json | None
 
 
 def _metrics_dataclass_payload(metrics: MetricsDataclass) -> Json:

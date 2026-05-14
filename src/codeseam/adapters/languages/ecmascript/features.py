@@ -19,6 +19,7 @@ from codeseam.analysis import (
     OperationFlow,
     ParameterUseVector,
     ParamIR,
+    call_kwarg_shape_values,
 )
 from codeseam.platform import identifier_tokens
 
@@ -324,7 +325,9 @@ def _literal_shapes(default_roles: dict[str, str], calls: list[CallFingerprint])
     shapes = {value for value in default_roles.values() if value.startswith("CONST_")}
     for call in calls:
         shapes.update(value for value in call.arg_roles if value.startswith("CONST_"))
-        shapes.update(value for value in _kwarg_shape_values(call) if value.startswith("CONST_"))
+        shapes.update(
+            value for value in call_kwarg_shape_values(call) if value.startswith("CONST_")
+        )
     return shapes
 
 
@@ -357,16 +360,12 @@ def _normalization_transform_tokens(calls: list[CallFingerprint]) -> set[str]:
             continue
         if not _all_constant_roles(call.arg_roles):
             continue
-        if not _all_constant_roles(_kwarg_shape_values(call)):
+        if not _all_constant_roles(call_kwarg_shape_values(call)):
             continue
         callee = "_".join(item for item in call.callee_shape.name_tokens if item)
         if callee in {"decode", "encode"} and call.token:
             tokens.add(call.token)
     return tokens
-
-
-def _kwarg_shape_values(call: CallFingerprint) -> tuple[str, ...]:
-    return tuple(value for _, value in call.kwarg_shape)
 
 
 def _all_constant_roles(values: tuple[str, ...]) -> bool:
