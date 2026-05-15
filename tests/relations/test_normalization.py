@@ -151,7 +151,7 @@ def _member(
         start_line=1,
         end_line=2,
         role="function",
-        type_source=SignatureTypeSource.INFERRED,
+        type_source=SignatureTypeSource.FALLBACK,
         parameters=(parameter,),
         return_type="dict",
         canonical_shape="fn(T)->dict",
@@ -195,9 +195,7 @@ def _clone_context(**overrides: object) -> CloneClassificationInput:
             deltas=(),
             refactorability=overrides.get("refactorability", 0.0),
             abstraction_cost=overrides.get("abstraction_cost", 0.0),
-            argument_normalization=overrides.get(
-                "argument_normalization", ArgumentNormalization()
-            ),
+            argument_normalization=overrides.get("argument_normalization", ArgumentNormalization()),
         ),
     )
 

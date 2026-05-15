@@ -7,16 +7,20 @@ from codeseam.adapters.languages import LanguageAnalysisContext, LanguageRegistr
 from codeseam.analysis import FileRecord, FunctionRecord, PolicyConstant, SignatureAnalysis
 from codeseam.cache import (
     AnalysisCacheContext,
+    FileAnalysisCacheRequest,
     FileAnalysisCacheResult,
     LanguageRunCache,
+    PrefetchedSignatures,
     cached_file_analysis,
     signature_analyses_from_records,
     store_file_analysis,
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FileAnalysisResult:
+    """Compact file-analysis result retained by the pipeline."""
+
     functions: tuple[FunctionRecord, ...]
     signatures: tuple[SignatureAnalysis, ...]
     policy_constants: tuple[PolicyConstant, ...] = ()
@@ -43,6 +47,8 @@ def analyze_language_file(
     file_record: FileRecord,
     registry: LanguageRegistry,
     caches: AnalysisCacheContext | None,
+    *,
+    prefetched_signatures: PrefetchedSignatures | None = None,
 ) -> FileAnalysisResult:
     adapter = registry.adapter_for_language(context.language)
     if adapter is None:
@@ -51,18 +57,25 @@ def analyze_language_file(
         context = replace(context, run_cache=caches.language)
     if caches is None:
         analysis = adapter.extract_analysis(context)
+        functions = analysis.functions
+        signatures = signature_analyses_from_records(analysis.signatures)
+        policy_constants = analysis.policy_constants
+        del analysis
         return FileAnalysisResult(
-            functions=analysis.functions,
-            signatures=tuple(signature_analyses_from_records(list(analysis.signatures))),
-            policy_constants=analysis.policy_constants,
+            functions=functions,
+            signatures=signatures,
+            policy_constants=policy_constants,
         )
 
     cached = cached_file_analysis(
-        context,
-        file_record,
-        adapter.adapter_id.value,
-        supports_policy_constants=adapter.capabilities.policy_constants,
+        FileAnalysisCacheRequest(
+            context=context,
+            file_record=file_record,
+            adapter_id=adapter.adapter_id.value,
+            supports_policy_constants=adapter.capabilities.policy_constants,
+        ),
         caches=caches,
+        prefetched_signatures=prefetched_signatures,
     )
     if cached.complete:
         return FileAnalysisResult(
@@ -72,16 +85,20 @@ def analyze_language_file(
         )
 
     analysis = adapter.extract_analysis(context)
-    functions = cached.functions if cached.functions is not None else analysis.functions
+    extracted_functions = analysis.functions
+    extracted_signatures = analysis.signatures if cached.signatures is None else ()
+    extracted_policy_constants = analysis.policy_constants
+    del analysis
+    functions = cached.functions if cached.functions is not None else extracted_functions
     signatures = (
         cached.signatures
         if cached.signatures is not None
-        else tuple(signature_analyses_from_records(list(analysis.signatures)))
+        else signature_analyses_from_records(extracted_signatures)
     )
     policy_constants = (
         cached.policy_constants
         if cached.policy_constants is not None
-        else analysis.policy_constants
+        else extracted_policy_constants
     )
     if caches.file_analysis_enabled:
         store_file_analysis(

@@ -7,8 +7,12 @@ from codeseam.cache.context import (
     LanguageRunCache,
 )
 from codeseam.cache.file_analysis import (
+    FileAnalysisCacheRequest,
     FileAnalysisCacheResult,
+    FileSignatureCacheRequest,
+    PrefetchedSignatures,
     cached_file_analysis,
+    prefetch_cached_signatures,
     store_file_analysis,
 )
 from codeseam.cache.keys import (
@@ -75,9 +79,12 @@ __all__ = [
     "CacheCodec",
     "CacheWriteBuffer",
     "CachedSemanticProvider",
+    "FileAnalysisCacheRequest",
     "FileAnalysisCacheResult",
+    "FileSignatureCacheRequest",
     "LanguageRunCache",
     "PersistentCache",
+    "PrefetchedSignatures",
     "RELATION_DETAIL_FEATURE_CACHE_NAMESPACE",
     "REPOSITORY_FACTS_CACHE_NAMESPACE",
     "SEMANTIC_ENRICHMENT_CACHE_NAMESPACE",
@@ -100,6 +107,7 @@ __all__ = [
     "language_analysis_cache_key",
     "load_cache_blob",
     "persistent_cache",
+    "prefetch_cached_signatures",
     "relation_detail_cache_key",
     "relation_detail_identity",
     "repository_facts_cache_key",

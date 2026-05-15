@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -32,32 +33,48 @@ def run_cli(
     assert cli.main(args) == expected
 
 
-def run_cli_output(
-    root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    args: list[str],
-    *,
-    expected: int = OK,
-) -> str:
-    run_cli(root, monkeypatch, args, expected=expected)
-    return capsys.readouterr().out
-
-
 def repo_dir(root: Path) -> Path:
     repo = root / "repo"
     repo.mkdir()
     return repo
 
 
-def assert_contains(text: str, fragments: list[str]) -> None:
-    for fragment in fragments:
-        assert fragment in text
+def assert_contains(text: str, fragments: Sequence[str]) -> None:
+    missing = [fragment for fragment in fragments if fragment not in text]
+    assert not missing, (
+        "Missing expected output fragments:\n"
+        + "\n".join(f"- {fragment}" for fragment in missing)
+        + "\n\nActual output:\n"
+        + text
+    )
 
 
-def assert_paths_exist(root: Path, paths: list[str]) -> None:
-    for path in paths:
-        assert (root / path).exists()
+def assert_not_contains(text: str, fragments: Sequence[str]) -> None:
+    present = [fragment for fragment in fragments if fragment in text]
+    assert not present, (
+        "Unexpected output fragments:\n"
+        + "\n".join(f"- {fragment}" for fragment in present)
+        + "\n\nActual output:\n"
+        + text
+    )
+
+
+def assert_paths_exist(root: Path, paths: Sequence[str]) -> None:
+    missing = [path for path in paths if not (root / path).exists()]
+    assert not missing, (
+        "Missing expected paths:\n"
+        + "\n".join(f"- {path}" for path in missing)
+        + f"\n\nRoot: {root}"
+    )
+
+
+def assert_paths_absent(root: Path, paths: Sequence[str]) -> None:
+    present = [path for path in paths if (root / path).exists()]
+    assert not present, (
+        "Unexpected paths present:\n"
+        + "\n".join(f"- {path}" for path in present)
+        + f"\n\nRoot: {root}"
+    )
 
 
 def explain_command_error(

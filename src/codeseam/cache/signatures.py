@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import MISSING, fields
-from typing import Any, cast
+from collections.abc import Sequence
+from typing import cast
 
 from codeseam.analysis import (
     SignatureAnalysis,
@@ -18,12 +18,14 @@ from codeseam.version import (
 )
 
 
-def signature_analyses_from_records(records: list[SignatureRecord]) -> list[SignatureAnalysis]:
-    return [signature_analysis_from_record(record) for record in records]
+def signature_analyses_from_records(
+    records: Sequence[SignatureRecord],
+) -> tuple[SignatureAnalysis, ...]:
+    return tuple(signature_analysis_from_record(record) for record in records)
 
 
 def signature_core_cache_payload(
-    records: list[SignatureAnalysis],
+    records: Sequence[SignatureAnalysis],
 ) -> tuple[SignatureCore, ...]:
     """Return the hot persistent signature-cache form.
 
@@ -36,28 +38,30 @@ def signature_core_cache_payload(
 
 
 def signature_features_cache_payload(
-    records: list[SignatureAnalysis],
+    records: Sequence[SignatureAnalysis],
 ) -> tuple[SignatureAnalysisFeatures, ...]:
     return tuple(record.features for record in records)
 
 
 def signature_output_cache_payload(
-    records: list[SignatureAnalysis],
+    records: Sequence[SignatureAnalysis],
 ) -> tuple[SignatureOutputDetail, ...]:
     return tuple(record.output for record in records)
 
 
-def signature_cores_from_cache_value(value: object) -> list[SignatureCore] | None:
+def signature_cores_from_cache_value(value: object) -> tuple[SignatureCore, ...] | None:
     return _cache_items(value, SignatureCore)
 
 
 def signature_features_from_cache_value(
     value: object,
-) -> list[SignatureAnalysisFeatures] | None:
+) -> tuple[SignatureAnalysisFeatures, ...] | None:
     return _cache_items(value, SignatureAnalysisFeatures)
 
 
-def signature_output_from_cache_value(value: object) -> list[SignatureOutputDetail] | None:
+def signature_output_from_cache_value(
+    value: object,
+) -> tuple[SignatureOutputDetail, ...] | None:
     return _cache_items(value, SignatureOutputDetail)
 
 
@@ -71,45 +75,35 @@ def signature_analyses_from_cache_values(
     output_items = signature_output_from_cache_value(outputs)
     if core_items is None or feature_items is None or output_items is None:
         return None
-    if not (len(core_items) == len(feature_items) == len(output_items)):
+    return signature_analyses_from_cache_parts(core_items, feature_items, output_items)
+
+
+def signature_analyses_from_cache_parts(
+    cores: Sequence[SignatureCore],
+    features: Sequence[SignatureAnalysisFeatures],
+    outputs: Sequence[SignatureOutputDetail],
+) -> tuple[SignatureAnalysis, ...] | None:
+    if not (len(cores) == len(features) == len(outputs)):
         return None
     return tuple(
         SignatureAnalysis(core=core, features=feature, output=output)
-        for core, feature, output in zip(core_items, feature_items, output_items, strict=True)
+        for core, feature, output in zip(cores, features, outputs, strict=True)
     )
 
 
-def _cache_items[T](value: object, item_type: type[T]) -> list[T] | None:
-    if not isinstance(value, list | tuple):
+def _cache_items[T](value: object, item_type: type[T]) -> tuple[T, ...] | None:
+    if not isinstance(value, tuple):
         return None
     if not all(isinstance(item, item_type) for item in value):
         return None
-    items = [_with_dataclass_defaults(item, item_type) for item in value]
-    return None if any(item is None for item in items) else cast("list[T]", items)
-
-
-def _with_dataclass_defaults[T](item: T, item_type: type[T]) -> T | None:
-    """Rehydrate old cached dataclasses after optional fields are added."""
-
-    if not hasattr(item_type, "__dataclass_fields__"):
-        return item
-    values: dict[str, Any] = {}
-    for field in fields(cast("Any", item_type)):
-        if hasattr(item, field.name):
-            values[field.name] = getattr(item, field.name)
-        elif field.default is not MISSING:
-            values[field.name] = field.default
-        elif field.default_factory is not MISSING:
-            values[field.name] = cast("Any", field.default_factory)()
-        else:
-            return None
-    return item_type(**values)
+    return cast("tuple[T, ...]", value)
 
 
 __all__ = [
     "SIGNATURE_CORE_CACHE_RECORD_SCHEMA",
     "SIGNATURE_FEATURES_CACHE_RECORD_SCHEMA",
     "SIGNATURE_OUTPUT_CACHE_RECORD_SCHEMA",
+    "signature_analyses_from_cache_parts",
     "signature_analyses_from_cache_values",
     "signature_analyses_from_records",
     "signature_core_cache_payload",

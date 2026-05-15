@@ -83,23 +83,23 @@ class DataflowGraph:
 
 @dataclass(frozen=True, slots=True)
 class OperationCompact:
-    statement_sequence: tuple[str, ...] = ()
-    call_tokens: tuple[str, ...] = ()
-    parameter_default_roles: tuple[tuple[str, str], ...] = ()
-    normalization_transform_tokens: tuple[str, ...] = ()
-    graph_features: frozenset[str] = frozenset()
-    literal_shapes: frozenset[str] = frozenset()
-    receiver_shapes: frozenset[str] = frozenset()
-    parameter_features: tuple[tuple[str, frozenset[str]], ...] = ()
-    statement_arg_reads: tuple[tuple[int, tuple[str, ...]], ...] = ()
-    control_context_vector: tuple[str, ...] = ()
-    body_shape: str = ""
     body_shape_hash: str = ""
+    body_shape: str = ""
     body_tree_node_count: int = 0
     branch_count: int = 0
+    call_tokens: tuple[str, ...] = ()
+    control_context_vector: tuple[str, ...] = ()
+    graph_features: frozenset[str] = frozenset()
+    literal_shapes: frozenset[str] = frozenset()
     loop_count: int = 0
-    return_count: int = 0
     max_nesting: int = 0
+    normalization_transform_tokens: tuple[str, ...] = ()
+    parameter_default_roles: tuple[tuple[str, str], ...] = ()
+    parameter_features: tuple[tuple[str, frozenset[str]], ...] = ()
+    receiver_shapes: frozenset[str] = frozenset()
+    return_count: int = 0
+    statement_arg_reads: tuple[tuple[int, tuple[str, ...]], ...] = ()
+    statement_sequence: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,8 +170,69 @@ class PolicyConstant:
         object.__setattr__(self, "end_line", _line_number(self.end_line, default=self.start_line))
 
 
+@dataclass(frozen=True, slots=True)
+class SignatureIdentity:
+    language: str = ""
+    language_family: LanguageFamily = LanguageFamily.UNKNOWN
+    adapter: AdapterId = AdapterId.UNKNOWN
+    file: str = ""
+    symbol: str = ""
+    normalized_symbol: str = ""
+    container: str | None = None
+    start_line: int = 1
+    end_line: int = 1
+    role: str = ""
+    signature_id: str = ""
+    function_id: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "language_family", language_family(self.language_family))
+        object.__setattr__(self, "adapter", adapter_id(self.adapter))
+        object.__setattr__(self, "start_line", _line_number(self.start_line, default=1))
+        object.__setattr__(self, "end_line", _line_number(self.end_line, default=self.start_line))
+
+
+@dataclass(frozen=True, slots=True)
+class SignatureShape:
+    type_source: SignatureTypeSource = SignatureTypeSource.UNKNOWN
+    parameters: tuple[str, ...] = ()
+    return_type: str = ""
+    canonical_shape: str = ""
+    shape_hash: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "type_source", _signature_type_source(self.type_source))
+        object.__setattr__(self, "parameters", tuple(self.parameters))
+
+
+@dataclass(frozen=True, slots=True)
+class SignatureBodySummary:
+    body_line_count: int = 0
+    body_shape_hash: str = ""
+    body_tree_node_count: int = 0
+    statement_sequence: tuple[str, ...] = ()
+    call_tokens: tuple[str, ...] = ()
+    control_context_vector: tuple[str, ...] = ()
+    return_signature: tuple[str, ...] = ()
+    try_statement_count: int = 0
+    raise_statement_count: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "statement_sequence", tuple(self.statement_sequence))
+        object.__setattr__(self, "call_tokens", tuple(self.call_tokens))
+        object.__setattr__(self, "control_context_vector", tuple(self.control_context_vector))
+        object.__setattr__(self, "return_signature", tuple(self.return_signature))
+
+
 @dataclass(slots=True)
 class SignatureRecord:
+    """Hydrated adapter DTO.
+
+    Adapters may build this large compatibility record, but pipeline/cache
+    boundaries should immediately convert it to ``SignatureAnalysis`` and avoid
+    retaining it across clustering or relation scoring.
+    """
+
     language: str
     language_family: LanguageFamily
     adapter: AdapterId
@@ -262,6 +323,52 @@ class SignatureCore:
         object.__setattr__(self, "language_family", language_family(self.language_family))
         object.__setattr__(self, "adapter", adapter_id(self.adapter))
         object.__setattr__(self, "type_source", _signature_type_source(self.type_source))
+        object.__setattr__(self, "parameters", tuple(self.parameters))
+        object.__setattr__(self, "statement_sequence", tuple(self.statement_sequence))
+        object.__setattr__(self, "call_tokens", tuple(self.call_tokens))
+        object.__setattr__(self, "control_context_vector", tuple(self.control_context_vector))
+        object.__setattr__(self, "return_signature", tuple(self.return_signature))
+
+    @property
+    def identity(self) -> SignatureIdentity:
+        return SignatureIdentity(
+            language=self.language,
+            language_family=self.language_family,
+            adapter=self.adapter,
+            file=self.file,
+            symbol=self.symbol,
+            normalized_symbol=self.normalized_symbol,
+            container=self.container,
+            start_line=self.start_line,
+            end_line=self.end_line,
+            role=self.role,
+            signature_id=self.signature_id,
+            function_id=self.function_id,
+        )
+
+    @property
+    def shape(self) -> SignatureShape:
+        return SignatureShape(
+            type_source=self.type_source,
+            parameters=self.parameters,
+            return_type=self.return_type,
+            canonical_shape=self.canonical_shape,
+            shape_hash=self.shape_hash,
+        )
+
+    @property
+    def body(self) -> SignatureBodySummary:
+        return SignatureBodySummary(
+            body_line_count=self.body_line_count,
+            body_shape_hash=self.body_shape_hash,
+            body_tree_node_count=self.body_tree_node_count,
+            statement_sequence=self.statement_sequence,
+            call_tokens=self.call_tokens,
+            control_context_vector=self.control_context_vector,
+            return_signature=self.return_signature,
+            try_statement_count=self.try_statement_count,
+            raise_statement_count=self.raise_statement_count,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,32 +437,6 @@ def signature_analysis_from_record(record: SignatureRecord) -> SignatureAnalysis
         core=_core_from_record(record, statements, calls),
         features=_features_from_record(record, calls),
         output=_output_from_record(record),
-    )
-
-
-def operation_features_from_record(record: SignatureRecord) -> OperationFeatures:
-    return OperationFeatures(
-        compact=OperationCompact(
-            statement_sequence=tuple(record.statement_sequence),
-            call_tokens=tuple(record.call_tokens),
-            parameter_default_roles=tuple(sorted(record.parameter_default_roles.items())),
-            normalization_transform_tokens=tuple(record.normalization_transform_tokens),
-            graph_features=record.graph_features,
-            literal_shapes=record.literal_shapes,
-            receiver_shapes=record.receiver_shapes,
-            parameter_features=tuple(sorted(record.parameter_features.items())),
-            statement_arg_reads=tuple(record.statement_arg_reads),
-            control_context_vector=tuple(record.control_context_vector),
-            body_shape=record.body_shape,
-            body_shape_hash=record.body_shape_hash,
-            body_tree_node_count=record.body_tree_node_count,
-        ),
-        flow=OperationFlow(
-            call_fingerprints=record.call_fingerprints,
-            parameter_use_vectors=tuple(sorted(record.parameter_use_vectors.items())),
-            parameter_default_roles=tuple(sorted(record.parameter_default_roles.items())),
-            local_dataflow_graph=record.local_dataflow_graph,
-        ),
     )
 
 
@@ -521,10 +602,6 @@ def call_kwarg_shape_values(call: CallFingerprint) -> tuple[str, ...]:
     return tuple(value for _, value in call.kwarg_shape)
 
 
-def _constant_roles(values: Iterable[object]) -> set[str]:
-    return {item for item in values if isinstance(item, str) and item.startswith("CONST_")}
-
-
 def _all_constant_roles(values: Iterable[object]) -> bool:
     values = tuple(values)
     return all(isinstance(item, str) and item.startswith("CONST_") for item in values)
@@ -554,18 +631,16 @@ __all__ = [
     "DuplicateBlockOccurrence",
     "IntraFunctionDuplicateBlock",
     "NormalizationLevel",
-    "OperationCompact",
-    "OperationFeatures",
-    "OperationFlow",
     "ParameterUseVector",
     "PolicyConstant",
     "SignatureAnalysis",
     "SignatureAnalysisFeatures",
+    "SignatureBodySummary",
     "SignatureCore",
+    "SignatureIdentity",
     "SignatureOutputDetail",
     "SignatureRecord",
-    "empty_operation_features",
-    "operation_features_from_record",
+    "SignatureShape",
     "signature_analysis_key",
     "signature_analysis_from_core",
     "signature_analysis_from_record",

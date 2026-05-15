@@ -23,7 +23,6 @@ class BoundarySpecificity(StrEnum):
 class SignatureTypeSource(StrEnum):
     DECLARED_SYNTAX = "declared_syntax"
     FALLBACK = "fallback"
-    INFERRED = "inferred"
     UNKNOWN = "unknown"
 
 

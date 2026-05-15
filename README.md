@@ -3,7 +3,9 @@ A tool to scan for repeated code patterns and surface what can be refactored.
 
 ## Highlights
 
-* **Agent-ready report**: Artefact outputs are optimised for coding agents.
+* **Refactor focused** - Surfaces repeated code patterns that are worth reviewing.
+* **Structure-aware** - Compares signatures, control flow, calls, and relation evidence.
+* **Agent ready** - Writes compact report artifacts designed for coding-agent workflows.
 
 ### Examples
 
@@ -78,10 +80,33 @@ def can_generate_invoice(account, order):
 You can alternatively "git clone" this repository to any directory:
 
 ```bash
-git clone --depth 1 <LINK>
+git clone --depth 1 https://github.com/zerowarden/codeseam.git
 ```
 
 and then run `uv sync`.
+
+## Local Development
+
+```bash
+uv sync
+uv run codeseam --help
+```
+
+Use the Makefile targets to execute commands: 
+
+```bash
+make deadcode
+make lint
+make typecheck
+make test
+make format
+```
+
+For a local scan, run:
+
+```bash
+make analyze ANALYZE_ARGS="--repo-root /path/to/repo"
+```
 
 ## Quick Start
 
@@ -98,7 +123,7 @@ Run `codeseam init`
 - Automated refactoring tool
 
 ## Methodology
-See [METHODOLOGY](./METHODOLOGY.md)
+See [METHODOLOGY](./docs/METHODOLOGY.md)
 
 ## License
 MIT

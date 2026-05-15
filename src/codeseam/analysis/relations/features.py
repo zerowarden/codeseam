@@ -96,7 +96,6 @@ def _cache_key(member: MemberInput) -> tuple[str, ...]:
             "analysis",
             str(id(member)),
         )
-    raise TypeError(f"unsupported relation member input: {type(member).__name__}")
 
 
 def _error_shape(

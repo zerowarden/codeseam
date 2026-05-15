@@ -29,8 +29,11 @@ from codeseam.analysis import (
     RelationKind,
     RepositoryFacts,
     RepositoryScan,
+    SignatureBodySummary,
     SignatureCore,
+    SignatureIdentity,
     SignatureRecord,
+    SignatureShape,
     SignatureTypeSource,
     abstraction_estimate,
     adapter_id,
@@ -39,7 +42,6 @@ from codeseam.analysis import (
     canonical_shape,
     language_family,
     member_features,
-    operation_features_from_record,
     signature_analysis_from_record,
     signature_core_from_record,
     signature_shape,
@@ -128,6 +130,66 @@ def test_signature_record_coerces_boundary_enums() -> None:
     assert record.type_source is SignatureTypeSource.DECLARED_SYNTAX
 
 
+def test_signature_core_exposes_typed_lifecycle_views() -> None:
+    core = SignatureCore(
+        language="python",
+        language_family=LanguageFamily.PYTHON,
+        adapter=AdapterId.PYTHON_AST,
+        file="src/a.py",
+        symbol="fn",
+        normalized_symbol="fn",
+        container=None,
+        start_line=1,
+        end_line=2,
+        role="source",
+        type_source=SignatureTypeSource.DECLARED_SYNTAX,
+        parameters=("str",),
+        return_type="str",
+        canonical_shape="fn(str)->str",
+        shape_hash="shape",
+        body_line_count=1,
+        body_shape_hash="body",
+        body_tree_node_count=2,
+        statement_sequence=("RETURN:ARG0",),
+        call_tokens=("str.strip",),
+        return_signature=("RETURN:ARG0",),
+        signature_id="sig_1",
+        function_id="fn_1",
+        semantic_roles=("api_surface",),
+    )
+
+    assert core.identity == SignatureIdentity(
+        language="python",
+        language_family=LanguageFamily.PYTHON,
+        adapter=AdapterId.PYTHON_AST,
+        file="src/a.py",
+        symbol="fn",
+        normalized_symbol="fn",
+        container=None,
+        start_line=1,
+        end_line=2,
+        role="source",
+        signature_id="sig_1",
+        function_id="fn_1",
+    )
+    assert core.shape == SignatureShape(
+        type_source=SignatureTypeSource.DECLARED_SYNTAX,
+        parameters=("str",),
+        return_type="str",
+        canonical_shape="fn(str)->str",
+        shape_hash="shape",
+    )
+    assert core.body == SignatureBodySummary(
+        body_line_count=1,
+        body_shape_hash="body",
+        body_tree_node_count=2,
+        statement_sequence=("RETURN:ARG0",),
+        call_tokens=("str.strip",),
+        return_signature=("RETURN:ARG0",),
+    )
+    assert core.semantic_roles == ("api_surface",)
+
+
 def test_signature_analysis_from_record_accepts_constant_kwargs() -> None:
     record = _signature_record("sig_1", "python", "src/a.py", "decode_arg", "fn()->T", "h")
     token = "ARG0.decode(args=;kwargs=encoding:CONST_utf8)"
@@ -175,17 +237,6 @@ def test_statement_arg_reads_ignore_malformed_statement_ids() -> None:
     analysis = signature_analysis_from_record(record)
 
     assert analysis.features.statement_arg_reads == ((2, ("ARG1",)),)
-
-
-def test_operation_features_from_record_returns_immutable_view() -> None:
-    record = _signature_record("sig_1", "python", "src/a.py", "fn", "fn()->T", "h")
-    record.statement_sequence = ["RETURN:ARG0"]
-    record.parameter_default_roles = {"ARG0": "CONST_none"}
-
-    features = operation_features_from_record(record)
-
-    assert features.compact.statement_sequence == ("RETURN:ARG0",)
-    assert features.compact.parameter_default_roles == (("ARG0", "CONST_none"),)
 
 
 def test_signature_record_can_emit_debug_body_tree_on_demand() -> None:

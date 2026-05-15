@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from codeseam.platform import sha256_text
 
@@ -8,9 +9,9 @@ GENERIC_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 
 
 def canonical_shape(
-    params: list[str],
+    params: Sequence[str],
     return_type: str,
-    declared_generics: list[str] | None = None,
+    declared_generics: Sequence[str] | None = None,
 ) -> tuple[str, str]:
     mapping: dict[str, str] = {}
     declared = set(declared_generics or [])

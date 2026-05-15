@@ -640,7 +640,7 @@ def test_signature_cache_payload_omits_body_tree(tmp_path: Path) -> None:
     assert records[0].body_shape_hash.startswith("shape32:")
     assert records[0].body_tree_node_count > 0
 
-    analyses = signature_analyses_from_records(list(records))
+    analyses = signature_analyses_from_records(records)
     core_payload = signature_core_cache_payload(analyses)
     features_payload = signature_features_cache_payload(analyses)
     output_payload = signature_output_cache_payload(analyses)

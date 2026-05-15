@@ -33,7 +33,7 @@ class ParserError(Exception):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
+    parser = build_parser()
     try:
         args = parser.parse_args(argv)
     except ParserError as exc:
@@ -73,7 +73,7 @@ def _run_handler(args: argparse.Namespace) -> CliOutput:
         )
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     parser = CodeseamArgumentParser(
         prog="codeseam",
         description=(

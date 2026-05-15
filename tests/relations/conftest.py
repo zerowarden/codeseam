@@ -69,7 +69,7 @@ def signature_analysis() -> Callable[..., SignatureAnalysis]:
             start_line=1,
             end_line=max(1, len(statements)),
             role="source",
-            type_source=SignatureTypeSource.INFERRED,
+            type_source=SignatureTypeSource.FALLBACK,
             parameters=("arg0",),
             return_type="object",
             canonical_shape="fn(arg0)->object",

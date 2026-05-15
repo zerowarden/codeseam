@@ -445,7 +445,7 @@ def _member(  # noqa: PLR0913
         start_line=1,
         end_line=2,
         role="function",
-        type_source=SignatureTypeSource.INFERRED,
+        type_source=SignatureTypeSource.FALLBACK,
         parameters=("arg0",),
         return_type="object",
         canonical_shape="fn(arg0)->object",

@@ -62,8 +62,15 @@ class StaticLanguageSupport:
     capabilities = AdapterCapabilities()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LanguageAdapterAnalysis:
+    """Raw adapter extraction result.
+
+    ``signatures`` are hydrated ``SignatureRecord`` DTOs. The file-analysis
+    boundary converts them to compact ``SignatureAnalysis`` records before the
+    pipeline retains or caches the result.
+    """
+
     functions: tuple[FunctionRecord, ...]
     signatures: tuple[SignatureRecord, ...]
     policy_constants: tuple[PolicyConstant, ...] = ()

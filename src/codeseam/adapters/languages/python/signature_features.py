@@ -13,11 +13,9 @@ from codeseam.analysis import (
     DataflowGraph,
     DataflowNode,
     ExpressionShape,
-    OperationCompact,
-    OperationFeatures,
-    OperationFlow,
     ParameterUseVector,
 )
+from codeseam.analysis.signatures.model import OperationCompact, OperationFeatures, OperationFlow
 from codeseam.platform import cached_identifier_tokens
 
 type _CollectResult = tuple[int, int]

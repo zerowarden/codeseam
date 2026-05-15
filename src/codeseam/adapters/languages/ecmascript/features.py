@@ -14,13 +14,11 @@ from codeseam.analysis import (
     DataflowGraph,
     DataflowNode,
     ExpressionShape,
-    OperationCompact,
-    OperationFeatures,
-    OperationFlow,
     ParameterUseVector,
     ParamIR,
     call_kwarg_shape_values,
 )
+from codeseam.analysis.signatures.model import OperationCompact, OperationFeatures, OperationFlow
 from codeseam.platform import identifier_tokens
 
 CALL_TYPES = frozenset({"call_expression", "new_expression"})

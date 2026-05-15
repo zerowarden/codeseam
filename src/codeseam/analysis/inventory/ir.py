@@ -6,13 +6,12 @@ from codeseam.analysis.signatures import (
     AdapterId,
     IntraFunctionDuplicateBlock,
     LanguageFamily,
-    OperationFeatures,
     SignatureTypeSource,
     adapter_id,
     canonical_shape,
-    empty_operation_features,
     language_family,
 )
+from codeseam.analysis.signatures.model import OperationFeatures, empty_operation_features
 
 UNKNOWN = "UNKNOWN"
 

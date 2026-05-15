@@ -16,7 +16,7 @@ from codeseam.cli.exit_codes import (
     THRESHOLD_BREACHED,
     USER_INPUT_ERROR,
 )
-from codeseam.cli.main import _build_parser, main
+from codeseam.cli.main import build_parser, main
 
 __all__ = [
     "ANALYZE_FORMATS",
@@ -30,7 +30,7 @@ __all__ = [
     "REVIEW_TIER_LABELS",
     "THRESHOLD_BREACHED",
     "USER_INPUT_ERROR",
-    "_build_parser",
+    "build_parser",
     "main",
     "render_ci_summary",
 ]
