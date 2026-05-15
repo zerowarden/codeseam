@@ -1,14 +1,35 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import pytest
 
 from codeseam import cli
 from codeseam.analysis import FileRecord
+from codeseam.cache import PersistentCache, persistent_cache
 from codeseam.cli import OK
+
+
+@pytest.fixture
+def cache_root(tmp_path: Path) -> Path:
+    return tmp_path / ".cache" / "codeseam"
+
+
+@pytest.fixture
+def cache_factory(cache_root: Path) -> Iterator[Callable[..., PersistentCache]]:
+    opened: list[PersistentCache] = []
+
+    def make(*, enabled: bool = True) -> PersistentCache:
+        cache = persistent_cache(cache_root, enabled=enabled)
+        opened.append(cache)
+        return cache
+
+    yield make
+
+    for cache in reversed(opened):
+        cache.close()
 
 
 def write_agent_sidecar(root: Path, filename: str, records: list[dict[str, object]]) -> None:
@@ -40,40 +61,71 @@ def repo_dir(root: Path) -> Path:
 
 
 def assert_contains(text: str, fragments: Sequence[str]) -> None:
-    missing = [fragment for fragment in fragments if fragment not in text]
-    assert not missing, (
-        "Missing expected output fragments:\n"
-        + "\n".join(f"- {fragment}" for fragment in missing)
-        + "\n\nActual output:\n"
-        + text
-    )
+    _assert_text_fragments(text, fragments, expected_present=True)
 
 
 def assert_not_contains(text: str, fragments: Sequence[str]) -> None:
-    present = [fragment for fragment in fragments if fragment in text]
-    assert not present, (
-        "Unexpected output fragments:\n"
-        + "\n".join(f"- {fragment}" for fragment in present)
-        + "\n\nActual output:\n"
-        + text
-    )
+    _assert_text_fragments(text, fragments, expected_present=False)
 
 
 def assert_paths_exist(root: Path, paths: Sequence[str]) -> None:
-    missing = [path for path in paths if not (root / path).exists()]
-    assert not missing, (
-        "Missing expected paths:\n"
-        + "\n".join(f"- {path}" for path in missing)
-        + f"\n\nRoot: {root}"
-    )
+    _assert_paths(root, paths, expected_present=True)
 
 
 def assert_paths_absent(root: Path, paths: Sequence[str]) -> None:
-    present = [path for path in paths if (root / path).exists()]
-    assert not present, (
-        "Unexpected paths present:\n"
-        + "\n".join(f"- {path}" for path in present)
-        + f"\n\nRoot: {root}"
+    _assert_paths(root, paths, expected_present=False)
+
+
+def _assert_text_fragments(
+    text: str,
+    fragments: Sequence[str],
+    *,
+    expected_present: bool,
+) -> None:
+    _assert_items(
+        fragments,
+        present=lambda fragment: fragment in text,
+        expected_present=expected_present,
+        failure_heading=(
+            "Missing expected output fragments:"
+            if expected_present
+            else "Unexpected output fragments:"
+        ),
+        context=f"\n\nActual output:\n{text}",
+    )
+
+
+def _assert_paths(root: Path, paths: Sequence[str], *, expected_present: bool) -> None:
+    failure_heading = (
+        "Missing expected paths:" if expected_present else "Unexpected paths present:"
+    )
+    _assert_items(
+        paths,
+        present=lambda path: (root / path).exists(),
+        expected_present=expected_present,
+        failure_heading=failure_heading,
+        context=f"\n\nRoot: {root}",
+    )
+
+
+def _assert_items[T](
+    items: Sequence[T],
+    *,
+    present: Callable[[T], bool],
+    expected_present: bool,
+    failure_heading: str,
+    context: str,
+) -> None:
+    _assert_no_items(
+        [item for item in items if present(item) is not expected_present],
+        failure_heading=failure_heading,
+        context=context,
+    )
+
+
+def _assert_no_items[T](items: Sequence[T], *, failure_heading: str, context: str) -> None:
+    assert not items, (
+        failure_heading + "\n" + "\n".join(f"- {item}" for item in items) + context
     )
 
 

@@ -21,32 +21,6 @@ LSH_ALWAYS_TRIGGER = 0
 
 
 @pytest.fixture
-def force_lsh(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
-    def apply() -> None:
-        monkeypatch.setattr(candidates, "LSH_CLUSTER_MEMBER_THRESHOLD", 2)
-        monkeypatch.setattr(candidates, "LSH_PAIR_CAP_TRIGGER", LSH_ALWAYS_TRIGGER)
-
-    return apply
-
-
-@pytest.fixture
-def force_lsh_collision(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
-    def apply() -> None:
-        monkeypatch.setattr(
-            candidates,
-            "minhash_signature",
-            lambda _values, *, size: FORCED_LSH_SIGNATURE,
-        )
-        monkeypatch.setattr(
-            candidates,
-            "lsh_band_keys",
-            lambda _signature, *, bands: ((0, (1, 2)),),
-        )
-
-    return apply
-
-
-@pytest.fixture
 def signature_analysis() -> Callable[..., SignatureAnalysis]:
     def build(  # noqa: PLR0913
         symbol: str,
@@ -94,3 +68,42 @@ def signature_analysis() -> Callable[..., SignatureAnalysis]:
         )
 
     return build
+
+
+def _lsh_fixture(
+    name: str,
+    *,
+    thresholds: bool = False,
+    collision: bool = False,
+) -> Callable[[pytest.MonkeyPatch], Callable[[], None]]:
+    @pytest.fixture(name=name)
+    def fixture(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
+        return lambda: _force_lsh(monkeypatch, thresholds=thresholds, collision=collision)
+
+    return fixture
+
+
+def _force_lsh(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    thresholds: bool = False,
+    collision: bool = False,
+) -> None:
+    if thresholds:
+        monkeypatch.setattr(candidates, "LSH_CLUSTER_MEMBER_THRESHOLD", 2)
+        monkeypatch.setattr(candidates, "LSH_PAIR_CAP_TRIGGER", LSH_ALWAYS_TRIGGER)
+    if collision:
+        monkeypatch.setattr(
+            candidates,
+            "minhash_signature",
+            lambda _values, *, size: FORCED_LSH_SIGNATURE,
+        )
+        monkeypatch.setattr(
+            candidates,
+            "lsh_band_keys",
+            lambda _signature, *, bands: ((0, (1, 2)),),
+        )
+
+
+force_lsh = _lsh_fixture("force_lsh", thresholds=True)
+force_lsh_collision = _lsh_fixture("force_lsh_collision", collision=True)

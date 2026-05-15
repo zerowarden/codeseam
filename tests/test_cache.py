@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import pytest
+from helpers import cache_factory, cache_root
 
 from codeseam.cache import (
     CACHE_DB,
@@ -12,29 +12,10 @@ from codeseam.cache import (
     cache_blob,
     cache_key,
     load_cache_blob,
-    persistent_cache,
 )
 from codeseam.platform import Json
 
-
-@pytest.fixture
-def cache_root(tmp_path: Path) -> Path:
-    return tmp_path / ".cache" / "codeseam"
-
-
-@pytest.fixture
-def cache_factory(cache_root: Path) -> Iterator[Callable[..., PersistentCache]]:
-    opened: list[PersistentCache] = []
-
-    def make(*, enabled: bool = True) -> PersistentCache:
-        cache = persistent_cache(cache_root, enabled=enabled)
-        opened.append(cache)
-        return cache
-
-    yield make
-
-    for cache in reversed(opened):
-        cache.close()
+__all__ = ["cache_factory", "cache_root"]
 
 
 def test_persistent_cache_round_trips_blob_payload(
