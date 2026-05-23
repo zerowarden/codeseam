@@ -54,7 +54,7 @@ EDIT_ACTIONS = frozenset(
         ActionKind.REUSE_EXISTING_HELPER,
     )
 )
-RELATION_TRACKING_ACTIONS = frozenset(
+RELATION_NOTE_ACTIONS = frozenset(
     (
         ActionKind.RECORD_SHARED_CONCERN,
         ActionKind.INSPECT_SHARED_LIFECYCLE,
@@ -171,7 +171,7 @@ def _preconditions(  # noqa: PLR0913
 ) -> tuple[list[AssessmentGate], list[AssessmentGate]]:
     passed: list[AssessmentGate] = []
     failed: list[AssessmentGate] = []
-    if action in EDIT_ACTIONS | RELATION_TRACKING_ACTIONS:
+    if action in EDIT_ACTIONS | RELATION_NOTE_ACTIONS:
         _check(
             passed,
             failed,

@@ -18,7 +18,7 @@ from codeseam.cli.explain import ExplainRenderOptions, render_explain
 from codeseam.cli.models import CliOutput, OutputOptions
 from codeseam.cli.repository_summary import repository_summary
 from codeseam.output.serializers.ci import ci_payload, ci_sarif_payload
-from codeseam.output.serializers.review import targets_with_review_tiers
+from codeseam.output.serializers.finding_buckets import is_agent_summary_target
 from codeseam.output.serializers.titles import (
     display_action_title,
     display_reason_label,
@@ -474,8 +474,8 @@ def _finding_lines(findings: Json) -> list[Text]:
             "orange3",
         ),
         _finding_line(
-            findings[ReviewTier.TRACKING_SIGNAL],
-            REVIEW_TIER_LABELS[ReviewTier.TRACKING_SIGNAL],
+            findings[ReviewTier.MAINTENANCE_NOTE],
+            REVIEW_TIER_LABELS[ReviewTier.MAINTENANCE_NOTE],
             "",
         ),
     ]
@@ -569,12 +569,8 @@ def _assessment_band(target: Json, key: str) -> str:
 
 
 def _local_review_targets(targets: object) -> list[Json]:
-    review_targets = targets_with_review_tiers(
-        targets,
-        {ReviewTier.RECOMMENDED_EDIT, ReviewTier.REVIEW_CANDIDATE},
-    )
     surfaced_targets = [
-        target for target in review_targets if target.get("summary_eligible") is True
+        target for target in as_json_objects(targets) if is_agent_summary_target(target)
     ]
     return sorted(surfaced_targets, key=_local_target_key)
 

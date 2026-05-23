@@ -234,7 +234,7 @@ def test_context_classifier_downgrades_wide_generic_mapper_families() -> None:
                 relation_kind=RelationKind.COMMON_WRAPPER_DIFFERENT_CORE,
                 expected_kind="shared_lifecycle_different_payload",
                 expected_visibility=FindingVisibility.SUMMARY_GROUPED,
-                expected_review_tier=ReviewTier.TRACKING_SIGNAL,
+                expected_review_tier=ReviewTier.MAINTENANCE_NOTE,
                 expected_summary_eligible=True,
                 expected_action=ActionKind.RECORD_SHARED_CONCERN,
                 required_tags=("shared_lifecycle", "different_payload"),
@@ -262,7 +262,7 @@ def test_context_classifier_downgrades_wide_generic_mapper_families() -> None:
                 symbols=("_evidence_lines", "_pair_lines"),
                 expected_kind="render_section_family",
                 expected_visibility=FindingVisibility.SUMMARY_GROUPED,
-                expected_review_tier=ReviewTier.TRACKING_SIGNAL,
+                expected_review_tier=ReviewTier.MAINTENANCE_NOTE,
                 expected_summary_eligible=True,
                 expected_action=ActionKind.RECORD_SHARED_CONCERN,
                 required_tags=("render_section_family", "bounded_section_lines"),
@@ -304,7 +304,7 @@ def test_context_classifier_groups_collection_render_section_families() -> None:
 
     assert [item.kind for item in classifications] == ["render_section_family"]
     assert classifications[0].visibility == FindingVisibility.SUMMARY_GROUPED
-    assert classifications[0].review_tier == ReviewTier.TRACKING_SIGNAL
+    assert classifications[0].review_tier == ReviewTier.MAINTENANCE_NOTE
     assert classifications[0].summary_eligible is True
 
 
@@ -349,7 +349,7 @@ def test_context_classifier_tracks_broad_generic_predicate_families() -> None:
     )
 
     assert [item.kind for item in classifications] == ["generic_predicate_family"]
-    assert classifications[0].review_tier == ReviewTier.TRACKING_SIGNAL
+    assert classifications[0].review_tier == ReviewTier.MAINTENANCE_NOTE
     assert classifications[0].visibility == FindingVisibility.SUMMARY_GROUPED
     assert classifications[0].action == ActionKind.RECORD_SHARED_CONCERN
 

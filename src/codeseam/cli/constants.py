@@ -8,7 +8,7 @@ DEFAULT_TARGET_LIMIT = 50
 REVIEW_TIER_LABELS = {
     ReviewTier.RECOMMENDED_EDIT: "recommended edits",
     ReviewTier.REVIEW_CANDIDATE: "review required",
-    ReviewTier.TRACKING_SIGNAL: "tracking signals",
+    ReviewTier.MAINTENANCE_NOTE: "maintenance notes",
     ReviewTier.OBSERVATION: "observations",
 }
 

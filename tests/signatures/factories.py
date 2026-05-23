@@ -178,4 +178,3 @@ def typescript_adapter_core_kwargs() -> dict[str, object]:
         "family": LanguageFamily.ECMASCRIPT_TYPESCRIPT,
         "adapter": "treesitter_ecmascript_typescript",
     }
-

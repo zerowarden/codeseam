@@ -228,4 +228,3 @@ def test_broad_test_clusters_do_not_depend_on_python_or_pytest_shapes() -> None:
     assert clusters[0].cluster_scope == "broad_test_signature_summary"
     assert clusters[0].enrichment is None
     assert clusters[0].review_relevance == "test_pattern_family"
-

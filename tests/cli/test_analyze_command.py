@@ -59,7 +59,7 @@ def test_analyze_prints_human_summary(cli_runner: CliRunner) -> None:
             "Analysis:",
             REVIEW_TIER_LABELS[ReviewTier.RECOMMENDED_EDIT],
             REVIEW_TIER_LABELS[ReviewTier.REVIEW_CANDIDATE],
-            REVIEW_TIER_LABELS[ReviewTier.TRACKING_SIGNAL],
+            REVIEW_TIER_LABELS[ReviewTier.MAINTENANCE_NOTE],
             "observations.",
         ],
     )

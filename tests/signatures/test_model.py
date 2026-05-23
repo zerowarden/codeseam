@@ -28,6 +28,7 @@ def test_member_features_use_typed_signature_core() -> None:
 
     assert member_features(item).body_hash == ""
 
+
 def test_signature_record_coerces_boundary_enums() -> None:
     record = SignatureRecord(
         schema_version="codeseam.signature.v1",

@@ -143,7 +143,7 @@ def test_observe_has_no_edit_recommendation_score() -> None:
     assert action.recommendation_confidence == 0.0
 
 
-def test_relation_tracking_action_has_no_edit_recommendation_score() -> None:
+def test_relation_note_action_has_no_edit_recommendation_score() -> None:
     action = _recommend(
         ActionKind.INSPECT_SHARED_LIFECYCLE,
         metrics=FindingMetrics(member_count=2, structural_relation_pair_count=1),

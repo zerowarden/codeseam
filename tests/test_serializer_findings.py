@@ -195,7 +195,7 @@ def _finding(  # noqa: PLR0913
     downgrade_reasons: tuple[str, ...] = (),
 ) -> Finding:
     decision = FindingDecision(
-        review_tier=ReviewTier.TRACKING_SIGNAL,
+        review_tier=ReviewTier.MAINTENANCE_NOTE,
         review_score=0.0,
         action_status=FindingActionStatus.RECORD_SHARED_CONCERN,
         primary_action=ActionKind.RECORD_SHARED_CONCERN,
@@ -211,7 +211,7 @@ def _finding(  # noqa: PLR0913
     return Finding(
         target_type=FindingTargetType.SIGNATURE_SHAPE,
         title=title,
-        review_tier=ReviewTier.TRACKING_SIGNAL,
+        review_tier=ReviewTier.MAINTENANCE_NOTE,
         review_score=0.0,
         action_status=FindingActionStatus.RECORD_SHARED_CONCERN,
         primary_action=ActionKind.RECORD_SHARED_CONCERN,

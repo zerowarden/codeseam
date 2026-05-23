@@ -15,7 +15,7 @@ from codeseam.platform import Json
     (
         ("recommended_edit", True),
         ("review_candidate", True),
-        ("tracking_signal", True),
+        ("maintenance_note", True),
         ("observation", False),
     ),
 )
@@ -43,7 +43,7 @@ def test_partition_keeps_observations_observation_only() -> None:
         [
             _target("rt_fix", "recommended_edit"),
             _target("rt_review", "review_candidate"),
-            _target("rt_track", "tracking_signal"),
+            _target("rt_note", "maintenance_note"),
             _target("rt_obs", "observation"),
         ]
     )
@@ -51,7 +51,7 @@ def test_partition_keeps_observations_observation_only() -> None:
     assert [target["target_id"] for target in analysis] == [
         "rt_fix",
         "rt_review",
-        "rt_track",
+        "rt_note",
     ]
     assert [target["target_id"] for target in observations] == ["rt_obs"]
 
@@ -61,7 +61,7 @@ def test_canonical_analysis_targets_dedupes_by_ranked_target_id() -> None:
         [
             _target("rt_same", "recommended_edit", title="ranked first"),
             _target("rt_other", "review_candidate"),
-            _target("rt_same", "tracking_signal", title="duplicate"),
+            _target("rt_same", "maintenance_note", title="duplicate"),
             _target("", "observation", title="anonymous"),
         ]
     )

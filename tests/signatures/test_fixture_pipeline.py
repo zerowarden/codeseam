@@ -129,4 +129,3 @@ def test_intra_function_duplicate_blocks_are_collected(
 
     assert len(blocks) == 1
     assert len(blocks[0].occurrences) == EXPECTED_LOCAL_DUPLICATE_OCCURRENCES
-

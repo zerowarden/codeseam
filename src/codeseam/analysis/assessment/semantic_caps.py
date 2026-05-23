@@ -35,7 +35,7 @@ TEST_HELPER_PAIR_MEMBER_COUNT = 2
 CAP_ORDER: dict[ReviewTier, int] = {
     ReviewTier.RECOMMENDED_EDIT: 0,
     ReviewTier.REVIEW_CANDIDATE: 1,
-    ReviewTier.TRACKING_SIGNAL: 2,
+    ReviewTier.MAINTENANCE_NOTE: 2,
     ReviewTier.OBSERVATION: 3,
 }
 
@@ -47,7 +47,6 @@ class SemanticCapAssessment:
     cap: RecommendationCapLabel
     reasons: tuple[str, ...] = ()
     primary_action: ActionKind | None = None
-    review_floor: ReviewTier | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +93,7 @@ def _declaration_or_interface_cap(
     if _declaration_dominates(metrics, dominant_ratio):
         if _api_surface_dominates(metrics, dominant_ratio):
             return SemanticCapAssessment(
-                RecommendationCap.MAX_TRACKING_SIGNAL,
+                RecommendationCap.MAX_MAINTENANCE_NOTE,
                 ("Semantic role cap: declaration/API surface recurrence is tracked, not edited.",),
             )
         return SemanticCapAssessment(
@@ -175,7 +174,7 @@ def _promoted_pair_parent_cap(
         )
     ):
         return _cap(
-            RecommendationCap.MAX_TRACKING_SIGNAL,
+            RecommendationCap.MAX_MAINTENANCE_NOTE,
             (
                 "Exact pair evidence was promoted into narrower targets; the broad "
                 "parent cluster is tracked instead of edited."
@@ -205,7 +204,7 @@ def _predicate_boundary_cap(
     if not has_relation_kind(metrics, PREDICATE_PARAMETERIZED_RELATION_KINDS):
         return None
     return _cap(
-        RecommendationCap.MAX_TRACKING_SIGNAL,
+        RecommendationCap.MAX_MAINTENANCE_NOTE,
         "Semantic role cap: predicate boundary variants are tracked instead of edited.",
     )
 
@@ -268,7 +267,7 @@ def _special_method_cap(
         and metrics.max_body_line_count <= policy.semantic_caps.tiny_body_line_count
     ):
         return _cap(
-            RecommendationCap.MAX_TRACKING_SIGNAL,
+            RecommendationCap.MAX_MAINTENANCE_NOTE,
             "Semantic role cap: tiny protocol methods are often required duplicates.",
         )
     if _all_or_most(
@@ -300,20 +299,27 @@ def apply_semantic_cap(
     cap: SemanticCapAssessment,
 ) -> CappedSurface:
     capped_tier = _capped_review_tier(review_tier, cap.cap)
-    capped_tier = _floored_review_tier(capped_tier, cap.review_floor)
     if cap.cap == RecommendationCap.ALLOW_RECOMMENDED_EDIT:
         capped_action = primary_action
         capped_status = action_status
     elif cap.cap == RecommendationCap.MAX_REVIEW_CANDIDATE:
-        action_capped = capped_tier != review_tier or action_status in EDIT_STATUSES
-        capped_action = cap.primary_action or (
-            ActionKind.RECORD_SHARED_CONCERN
-            if primary_action not in NON_EDIT_ACTIONS
-            else primary_action
+        action_capped = (
+            capped_tier != review_tier
+            or primary_action not in NON_EDIT_ACTIONS
+            or action_status in EDIT_STATUSES
         )
-        capped_status = FindingActionStatus.CAUTIOUS_CANDIDATE if action_capped else action_status
+        if action_capped:
+            capped_action = cap.primary_action or (
+                ActionKind.RECORD_SHARED_CONCERN
+                if primary_action not in NON_EDIT_ACTIONS
+                else primary_action
+            )
+            capped_status = FindingActionStatus.CAUTIOUS_CANDIDATE
+        else:
+            capped_action = primary_action
+            capped_status = action_status
     elif cap.cap in {
-        RecommendationCap.MAX_TRACKING_SIGNAL,
+        RecommendationCap.MAX_MAINTENANCE_NOTE,
         RecommendationCap.MAX_OBSERVATION,
     }:
         action_capped = capped_tier != review_tier or primary_action not in NON_EDIT_ACTIONS
@@ -353,7 +359,7 @@ def _protocol_cap(
             ),
         )
     return SemanticCapAssessment(
-        RecommendationCap.MAX_TRACKING_SIGNAL,
+        RecommendationCap.MAX_MAINTENANCE_NOTE,
         ("Semantic role cap: protocol/API methods are tracked instead of edited.",),
     )
 
@@ -365,7 +371,7 @@ def _api_surface_cap(
 ) -> SemanticCapAssessment:
     if FunctionSemanticRole.GENERATED_OR_CYTHON_BOUNDARY in roles:
         return SemanticCapAssessment(
-            RecommendationCap.MAX_TRACKING_SIGNAL,
+            RecommendationCap.MAX_MAINTENANCE_NOTE,
             ("Semantic role cap: generated/Cython boundary recurrence is tracked, not edited.",),
         )
     if FunctionSemanticRole.SYNC_ASYNC_MIRROR in roles:
@@ -382,7 +388,7 @@ def _api_surface_cap(
             ),
         )
     return SemanticCapAssessment(
-        RecommendationCap.MAX_TRACKING_SIGNAL,
+        RecommendationCap.MAX_MAINTENANCE_NOTE,
         ("Semantic role cap: adapter/API boundary recurrence is tracked, not edited.",),
     )
 
@@ -401,7 +407,7 @@ def _constructor_cap(
             primary_action=ActionKind.EXTRACT_SMALL_HELPER,
         )
     return SemanticCapAssessment(
-        RecommendationCap.MAX_TRACKING_SIGNAL,
+        RecommendationCap.MAX_MAINTENANCE_NOTE,
         ("Semantic role cap: small constructor duplication is usually object setup surface.",),
     )
 
@@ -415,7 +421,6 @@ def _test_cap() -> SemanticCapAssessment:
         RecommendationCap.MAX_REVIEW_CANDIDATE,
         ("Semantic role cap: test or fixture duplication needs review before editing.",),
         primary_action=ActionKind.RECORD_SHARED_CONCERN,
-        review_floor=ReviewTier.REVIEW_CANDIDATE,
     )
 
 
@@ -582,17 +587,11 @@ def _capped_review_tier(review_tier: ReviewTier, cap: RecommendationCapLabel) ->
     maximum = {
         RecommendationCap.ALLOW_RECOMMENDED_EDIT: ReviewTier.RECOMMENDED_EDIT,
         RecommendationCap.MAX_REVIEW_CANDIDATE: ReviewTier.REVIEW_CANDIDATE,
-        RecommendationCap.MAX_TRACKING_SIGNAL: ReviewTier.TRACKING_SIGNAL,
+        RecommendationCap.MAX_MAINTENANCE_NOTE: ReviewTier.MAINTENANCE_NOTE,
         RecommendationCap.MAX_OBSERVATION: ReviewTier.OBSERVATION,
         RecommendationCap.DO_NOT_REFACTOR: ReviewTier.OBSERVATION,
     }.get(cap, ReviewTier.OBSERVATION)
     return maximum if _tier_rank(maximum) > _tier_rank(review_tier) else review_tier
-
-
-def _floored_review_tier(review_tier: ReviewTier, floor: ReviewTier | None) -> ReviewTier:
-    if not floor:
-        return review_tier
-    return floor if _tier_rank(floor) < _tier_rank(review_tier) else review_tier
 
 
 def _tier_rank(review_tier: ReviewTier) -> int:

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from codeseam.analysis import (
     ActionKind,
+    FindingActionStatus,
 )
-from codeseam.output.reports.documents import render_agent_summary
+from codeseam.output.reports.documents import build_metrics, render_agent_summary
 from codeseam.platform import Json
 
 PRIMARY_ACTION_MEMBER_LINES = 2
+TOTAL_RECOMMENDED_EDIT_TIER_COUNT = 2
+VISIBLE_RECOMMENDED_EDIT_COUNT = 1
 
 
 def test_agent_summary_includes_agent_visible_review_targets() -> None:
@@ -59,7 +62,7 @@ def test_agent_summary_uses_visibility_not_priority() -> None:
 
 def test_agent_summary_hides_low_value_low_refactorability_targets() -> None:
     visible = _full_target("rt_000001", "recommended_edit", "src/visible.py")
-    weak = _full_target("rt_000002", "tracking_signal", "src/weak.py")
+    weak = _full_target("rt_000002", "maintenance_note", "src/weak.py")
     weak["refactor_value"] = "low"
     weak["refactorability_score"] = 0.2
     targets = [visible, weak]
@@ -77,6 +80,26 @@ def test_agent_summary_hides_low_value_low_refactorability_targets() -> None:
 
     assert "`rt_000001`" in markdown
     assert markdown.count("Suggested action") == 1
+
+
+def test_build_metrics_counts_recommended_edits_from_agent_visible_targets() -> None:
+    visible = _full_target("rt_000001", "recommended_edit", "src/visible.py")
+    visible["action_status"] = FindingActionStatus.RECOMMENDED_EDIT
+    hidden = _full_target("rt_000002", "recommended_edit", "src/hidden.py")
+    hidden["action_status"] = FindingActionStatus.RECOMMENDED_EDIT
+    hidden["visibility"] = "sidecar_only"
+    hidden["summary_eligible"] = False
+
+    metrics = build_metrics(
+        {"summary": {}, "artifact_index": {}},
+        [visible, hidden],
+        [],
+        [],
+    )
+
+    assert metrics["agent_visible_target_count"] == VISIBLE_RECOMMENDED_EDIT_COUNT
+    assert metrics["recommended_edit_tier_count"] == TOTAL_RECOMMENDED_EDIT_TIER_COUNT
+    assert metrics["recommended_edit_count"] == VISIBLE_RECOMMENDED_EDIT_COUNT
 
 
 def test_agent_summary_prefers_primary_action_members() -> None:

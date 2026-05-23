@@ -1,38 +1,50 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from codeseam.analysis import SignatureAnalysis, member_features, structural_shingles
 
 
+@dataclass(frozen=True, slots=True)
+class ShingleCase:
+    symbol: str
+    statements: tuple[str, ...]
+    calls: tuple[str, ...]
+    arg_reads: tuple[tuple[int, tuple[str, ...]], ...]
+    controls: tuple[str, ...] = ()
+
+
 def _shingles(
     signature_analysis: Callable[..., SignatureAnalysis],
-    symbol: str,
-    **overrides: object,
+    case: ShingleCase,
 ) -> frozenset[str]:
-    return structural_shingles(member_features(signature_analysis(symbol, **overrides)))
+    return structural_shingles(
+        member_features(
+            signature_analysis(
+                case.symbol,
+                statements=case.statements,
+                calls=case.calls,
+                arg_reads=case.arg_reads,
+                controls=case.controls,
+            )
+        )
+    )
 
 
 def test_structural_shingles_are_deterministic_and_categorized(
     signature_analysis: Callable[..., SignatureAnalysis],
 ) -> None:
-    shingles = _shingles(
-        signature_analysis,
-        "format_payload",
+    case = ShingleCase(
+        symbol="format_payload",
         statements=("ASSIGN:CALL:json.dumps", "RETURN:ARG0"),
         calls=("json.dumps(args=ARG0;kwargs=)",),
         arg_reads=((0, ("ARG0",)), (1, ("ARG1",))),
         controls=("TRY",),
     )
+    shingles = _shingles(signature_analysis, case)
 
-    assert shingles == _shingles(
-        signature_analysis,
-        "format_payload",
-        statements=("ASSIGN:CALL:json.dumps", "RETURN:ARG0"),
-        calls=("json.dumps(args=ARG0;kwargs=)",),
-        arg_reads=((0, ("ARG0",)), (1, ("ARG1",))),
-        controls=("TRY",),
-    )
+    assert shingles == _shingles(signature_analysis, case)
     assert {
         "STMT:ASSIGN:CALL",
         "STMT:RETURN:ARG",
@@ -56,17 +68,21 @@ def test_structural_shingles_normalize_statement_and_argument_details(
 ) -> None:
     left = _shingles(
         signature_analysis,
-        "left",
-        statements=("ASSIGN:CALL:path.write_text", "RETURN:ARG0"),
-        calls=("path.write_text(args=ARG0;kwargs=)",),
-        arg_reads=((0, ("ARG0",)),),
+        ShingleCase(
+            symbol="left",
+            statements=("ASSIGN:CALL:path.write_text", "RETURN:ARG0"),
+            calls=("path.write_text(args=ARG0;kwargs=)",),
+            arg_reads=((0, ("ARG0",)),),
+        ),
     )
     right = _shingles(
         signature_analysis,
-        "right",
-        statements=("ASSIGN:CALL:path.write_text", "RETURN:ARG7"),
-        calls=("path.write_text(args=ARG7;kwargs=)",),
-        arg_reads=((0, ("ARG7",)),),
+        ShingleCase(
+            symbol="right",
+            statements=("ASSIGN:CALL:path.write_text", "RETURN:ARG7"),
+            calls=("path.write_text(args=ARG7;kwargs=)",),
+            arg_reads=((0, ("ARG7",)),),
+        ),
     )
 
     assert {

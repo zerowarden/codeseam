@@ -26,4 +26,3 @@ def relation_pair_by_kind(cluster: dict[str, Any], kind: RelationKind) -> dict[s
 def namespace_stats(stats: dict[str, Any], namespace: str) -> dict[str, Any]:
     namespaces = as_json_object(stats.get("namespaces"))
     return as_json_object(namespaces.get(namespace))
-

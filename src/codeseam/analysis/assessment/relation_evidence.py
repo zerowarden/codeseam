@@ -38,8 +38,8 @@ def has_editable_parameterized_skeleton_relation(
     """Return whether same-skeleton evidence is strong enough for edit scoring.
 
     Same-skeleton literal/callee variants are real structural relations, but
-    most should stay as tracking evidence. Assessment treats them like editable
-    parameterized helper clones only when the scored relation already proves
+    most should stay as maintenance-note evidence. Assessment treats them like
+    editable parameterized helper clones only when the scored relation already proves
     near-identical body shape, same-role/local evidence, high refactorability,
     and low cost/risk.
     """

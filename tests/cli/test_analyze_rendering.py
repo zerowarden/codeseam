@@ -74,6 +74,19 @@ def test_analyze_threshold_breach_detection() -> None:
             absent=("Top review required:", "rt_sidecar"),
         ),
         AnalyzeOutputCase(
+            id="listed-low-value-target",
+            payload={
+                "target_id": "rt_low_value",
+                "title": "Low-value test helper recurrence",
+                "refactor_value": "low",
+                "refactorability_score": 0.2,
+                "summary_eligible": True,
+                "visibility": "listed",
+            },
+            expected=(),
+            absent=("Top review required:", "rt_low_value"),
+        ),
+        AnalyzeOutputCase(
             id="colored-location",
             payload={
                 "locations": [
@@ -149,8 +162,8 @@ def test_analyze_shows_top_ten_combined_review_targets(
             ci_target(
                 f"rt_review_{index}",
                 title=f"Review required {index}",
-                primary_action=ActionKind.RECORD_SHARED_CONCERN,
-                refactor_value="low",
+                primary_action=ActionKind.CONSOLIDATE_CLONE,
+                refactor_value="medium",
                 review_score=1.0 - (index / 100),
             )
         )

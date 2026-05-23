@@ -102,21 +102,21 @@ class RecommendationStatus(StrEnum):
 class ReviewTier(StrEnum):
     RECOMMENDED_EDIT = "recommended_edit"
     REVIEW_CANDIDATE = "review_candidate"
-    TRACKING_SIGNAL = "tracking_signal"
+    MAINTENANCE_NOTE = "maintenance_note"
     OBSERVATION = "observation"
 
 
 REVIEW_TIERS: tuple[ReviewTier, ...] = (
     ReviewTier.RECOMMENDED_EDIT,
     ReviewTier.REVIEW_CANDIDATE,
-    ReviewTier.TRACKING_SIGNAL,
+    ReviewTier.MAINTENANCE_NOTE,
     ReviewTier.OBSERVATION,
 )
 
 REVIEW_TIER_ORDER: dict[ReviewTier, int] = {
     ReviewTier.RECOMMENDED_EDIT: 0,
     ReviewTier.REVIEW_CANDIDATE: 1,
-    ReviewTier.TRACKING_SIGNAL: 2,
+    ReviewTier.MAINTENANCE_NOTE: 2,
     ReviewTier.OBSERVATION: 3,
 }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from operator import gt, is_
 from typing import Any
 
 import pytest
@@ -338,15 +340,25 @@ def assert_candidate_generation(
 
 def assert_positive_components(components: object, names: tuple[str, ...]) -> None:
     assert isinstance(components, dict)
-    for name in names:
-        assert components[name] > 0
+    assert_fields(components, names, gt, 0)
 
 
 def assert_positive_fields(payload: dict[str, Any], names: tuple[str, ...]) -> None:
-    for name in names:
-        assert payload[name] > 0
+    assert_fields(payload, names, gt, 0)
 
 
 def assert_true_fields(payload: dict[str, Any], names: tuple[str, ...]) -> None:
+    assert_fields(payload, names, is_, True)
+
+
+def assert_fields(
+    payload: Mapping[str, Any],
+    names: tuple[str, ...],
+    comparator: Callable[[Any, Any], Any],
+    expected: object,
+) -> None:
     for name in names:
-        assert payload[name] is True
+        value = payload[name]
+        assert bool(comparator(value, expected)), (
+            f"{name}: expected {value!r} to satisfy {comparator.__name__} {expected!r}"
+        )

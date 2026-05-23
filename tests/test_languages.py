@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
@@ -681,12 +682,9 @@ def test_python_relation_detail_reuses_extraction_function_nodes(
 
     request = _relation_detail_request(path, "service.py", "Python", "save", "sig_1")
 
-    def fail_function_node_index(_tree: object) -> object:
-        raise AssertionError("relation hydration should reuse extraction function nodes")
-
     monkeypatch.setattr(
         "codeseam.adapters.languages.python.adapter.function_node_index",
-        fail_function_node_index,
+        _fail_if_called("relation hydration should reuse extraction function nodes"),
     )
 
     relation_detail = adapter.hydrate_relation_detail(request)
@@ -720,19 +718,13 @@ def test_python_relation_detail_warm_cache_uses_function_slice(
         function=extraction_request.function,
     )
 
-    def fail_full_file_parse(_path: object) -> object:
-        raise AssertionError("warm relation hydration should not parse the full file")
-
-    def fail_function_node_index(_tree: object) -> object:
-        raise AssertionError("warm relation hydration should not index a full-file AST")
-
     monkeypatch.setattr(
         "codeseam.adapters.languages.python.adapter.parse_python",
-        fail_full_file_parse,
+        _fail_if_called("warm relation hydration should not parse the full file"),
     )
     monkeypatch.setattr(
         "codeseam.adapters.languages.python.adapter.function_node_index",
-        fail_function_node_index,
+        _fail_if_called("warm relation hydration should not index a full-file AST"),
     )
 
     relation_detail = adapter.hydrate_relation_detail(request)
@@ -827,6 +819,13 @@ def _relation_detail_request(
         signature=signature_analyses_from_records([record])[0],
         function=next(function for function in analysis.functions if function.symbol == symbol),
     )
+
+
+def _fail_if_called(message: str) -> Callable[..., object]:
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError(message)
+
+    return fail
 
 
 def _fixture_analysis(

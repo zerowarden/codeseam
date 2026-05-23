@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from codeseam.adapters.languages.tests_matcher import LanguageTestMatcher, test_matchers_for_repo
+from codeseam.adapters.repository.scan_manifest import FileContentSummary, ScanManifest
 from codeseam.analysis import FileRecord, classify_path, detect_language, is_analysis_language
 from codeseam.platform import (
     PROJECT_DIR,
@@ -17,6 +18,7 @@ from codeseam.platform import (
     matches_any,
     sha256_bytes,
 )
+from codeseam.platform.files import BINARY_PROBE_BYTES
 
 TOP_SKIPPED_GROUPS = 8
 GITIGNORE_GROUP = "gitignore"
@@ -77,6 +79,7 @@ class GitIgnoredPaths:
 def select_files(
     repo_root: Path,
     selection_config: dict[str, Any],
+    scan_manifest: ScanManifest | None = None,
 ) -> tuple[list[FileRecord], list[str]]:
     includes = list(selection_config.get("include", ["**/*"]))
     excludes = [*DEFAULT_EXCLUDES, *list(selection_config.get("exclude", []))]
@@ -90,7 +93,7 @@ def select_files(
     for rel, path in _walk_files(repo_root, exclude_matcher, git_ignored):
         if not include_matcher.matches(rel):
             continue
-        record = _record_for(path, Path(rel), test_matchers)
+        record = _record_for(path, Path(rel), test_matchers, scan_manifest)
         if record is None:
             continue
         records.append(record)
@@ -274,7 +277,9 @@ def _record_for(
     path: Path,
     relative: Path,
     test_matchers: dict[str, LanguageTestMatcher],
+    scan_manifest: ScanManifest | None,
 ) -> FileRecord | None:
+    rel = relative.as_posix()
     language = detect_language(relative)
     language_tests = test_matchers.get(language)
     classification = classify_path(
@@ -284,7 +289,7 @@ def _record_for(
     if not is_analysis_language(language):
         stat = path.stat()
         return FileRecord(
-            path=relative.as_posix(),
+            path=rel,
             language=language,
             size_bytes=stat.st_size,
             line_count=0,
@@ -295,18 +300,34 @@ def _record_for(
             is_test=classification.is_test,
             is_build_output=classification.is_build_output,
         )
-    if is_binary(path):
+    stat = path.stat()
+    summary = scan_manifest.content_summary(rel, stat) if scan_manifest is not None else None
+    if summary is None:
+        summary = _content_summary(path)
+    if summary is None:
         return None
-    data = path.read_bytes()
+    if scan_manifest is not None:
+        scan_manifest.remember(rel, stat, summary)
     return FileRecord(
-        path=relative.as_posix(),
+        path=rel,
         language=language,
-        size_bytes=len(data),
-        line_count=line_count(data),
-        content_hash=sha256_bytes(data),
+        size_bytes=summary.size_bytes,
+        line_count=summary.line_count,
+        content_hash=summary.content_hash,
         role=classification.role,
         is_generated=classification.is_generated,
         is_vendor=classification.is_vendor,
         is_test=classification.is_test,
         is_build_output=classification.is_build_output,
+    )
+
+
+def _content_summary(path: Path) -> FileContentSummary | None:
+    data = path.read_bytes()
+    if b"\0" in data[:BINARY_PROBE_BYTES]:
+        return None
+    return FileContentSummary(
+        size_bytes=len(data),
+        line_count=line_count(data),
+        content_hash=sha256_bytes(data),
     )

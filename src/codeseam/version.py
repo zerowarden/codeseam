@@ -39,6 +39,7 @@ POLICY_CONSTANT_CACHE_RECORD_SCHEMA = _cache_version("policy_const.v2")
 
 REPOSITORY_FACTS_CACHE_KEY_SCHEMA = _cache_version("repo_facts_key")
 REPOSITORY_FACTS_CACHE_VALUE_VERSION = _cache_version("repo_facts_value")
+SCAN_MANIFEST_SCHEMA_VERSION = _cache_version("scan_manifest.v1")
 
 RELATION_PAIR_CACHE_VERSION = _cache_version("rel_pair.v2")
 RELATION_PAIR_CACHE_KEY_SCHEMA = _cache_version("rel_pair_key")

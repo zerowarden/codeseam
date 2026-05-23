@@ -36,7 +36,7 @@ def render_ci_summary(payload: Json, targets: object = None) -> str:
         "Analysis:",
         _tier_line(payload, ReviewTier.RECOMMENDED_EDIT),
         _tier_line(payload, ReviewTier.REVIEW_CANDIDATE),
-        _tier_line(payload, ReviewTier.TRACKING_SIGNAL),
+        _tier_line(payload, ReviewTier.MAINTENANCE_NOTE),
         _tier_line(payload, ReviewTier.OBSERVATION),
         "",
         "CI:",
@@ -72,11 +72,11 @@ def _tier_line(payload: Json, tier: ReviewTier) -> str:
 def _surface_lines(payload: Json, targets: object) -> list[str]:
     findings = payload.get("findings", {})
     review_required = 0
-    tracking = 0
+    maintenance_notes = 0
     observations = 0
     if isinstance(findings, dict):
         review_required = json_int(findings.get(ReviewTier.REVIEW_CANDIDATE))
-        tracking = json_int(findings.get(ReviewTier.TRACKING_SIGNAL))
+        maintenance_notes = json_int(findings.get(ReviewTier.MAINTENANCE_NOTE))
         observations = json_int(findings.get(ReviewTier.OBSERVATION))
     failing = len(_surface_targets(targets))
     if not failing:
@@ -84,8 +84,8 @@ def _surface_lines(payload: Json, targets: object) -> list[str]:
             "  No failing targets surfaced.",
             "  Full results kept in artifacts: "
             f"{review_required:,} review required, "
-            f"{tracking:,} tracking signal"
-            f"{plural_suffix(tracking)}, "
+            f"{maintenance_notes:,} maintenance note"
+            f"{plural_suffix(maintenance_notes)}, "
             f"{observations:,} observation{plural_suffix(observations)}.",
         ]
     listed = min(failing, CI_TOP_REVIEW_TARGET_LIMIT)
@@ -93,8 +93,8 @@ def _surface_lines(payload: Json, targets: object) -> list[str]:
         f"  Listed below: {listed:,} {plural_noun(listed, 'failing target')}",
         "  Full results kept in artifacts: "
         f"{review_required:,} review required, "
-        f"{tracking:,} tracking signal"
-        f"{plural_suffix(tracking)}, "
+        f"{maintenance_notes:,} maintenance note"
+        f"{plural_suffix(maintenance_notes)}, "
         f"{observations:,} observation{plural_suffix(observations)}.",
     ]
 

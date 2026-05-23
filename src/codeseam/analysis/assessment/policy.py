@@ -8,7 +8,7 @@ type ConfigSection = Mapping[str, object]
 type RecommendationCapLabel = Literal[
     "allow_recommended_edit",
     "max_review_candidate",
-    "max_tracking_signal",
+    "max_maintenance_note",
     "max_observation",
     "do_not_refactor",
 ]
@@ -20,7 +20,7 @@ class RecommendationCap:
 
     ALLOW_RECOMMENDED_EDIT: Final[RecommendationCapLabel] = "allow_recommended_edit"
     MAX_REVIEW_CANDIDATE: Final[RecommendationCapLabel] = "max_review_candidate"
-    MAX_TRACKING_SIGNAL: Final[RecommendationCapLabel] = "max_tracking_signal"
+    MAX_MAINTENANCE_NOTE: Final[RecommendationCapLabel] = "max_maintenance_note"
     MAX_OBSERVATION: Final[RecommendationCapLabel] = "max_observation"
     DO_NOT_REFACTOR: Final[RecommendationCapLabel] = "do_not_refactor"
 
@@ -225,7 +225,7 @@ class RelationEvidencePolicy:
         metadata={
             "doc": (
                 "Maximum abstraction cost for same-skeleton variants before they remain "
-                "tracking/review evidence instead of edit evidence."
+                "maintenance-note/review evidence instead of edit evidence."
             )
         },
     )

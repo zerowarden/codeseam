@@ -62,4 +62,3 @@ def test_signature_shape_can_be_derived_from_function_ir() -> None:
     assert shape.canonical_shape == "fn(G0)->G0"
     assert shape.type_source is SignatureTypeSource.DECLARED_SYNTAX
     assert shape.caveats == []
-

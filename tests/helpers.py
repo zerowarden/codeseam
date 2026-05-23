@@ -96,9 +96,7 @@ def _assert_text_fragments(
 
 
 def _assert_paths(root: Path, paths: Sequence[str], *, expected_present: bool) -> None:
-    failure_heading = (
-        "Missing expected paths:" if expected_present else "Unexpected paths present:"
-    )
+    failure_heading = "Missing expected paths:" if expected_present else "Unexpected paths present:"
     _assert_items(
         paths,
         present=lambda path: (root / path).exists(),
@@ -124,9 +122,7 @@ def _assert_items[T](
 
 
 def _assert_no_items[T](items: Sequence[T], *, failure_heading: str, context: str) -> None:
-    assert not items, (
-        failure_heading + "\n" + "\n".join(f"- {item}" for item in items) + context
-    )
+    assert not items, failure_heading + "\n" + "\n".join(f"- {item}" for item in items) + context
 
 
 def explain_command_error(

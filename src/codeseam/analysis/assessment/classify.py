@@ -31,7 +31,7 @@ EDIT_ACTION_KINDS = frozenset(
         ActionKind.REUSE_EXISTING_HELPER,
     )
 )
-TRACKING_ACTION_KINDS = frozenset(
+MAINTENANCE_NOTE_ACTION_KINDS = frozenset(
     (
         ActionKind.RECORD_SHARED_CONCERN,
         ActionKind.INSPECT_SHARED_LIFECYCLE,
@@ -65,8 +65,8 @@ def classify_review_tier(
         tier = ReviewTier.RECOMMENDED_EDIT
     elif _review_candidate(assessment, review_score):
         tier = ReviewTier.REVIEW_CANDIDATE
-    elif _tracking_signal(assessment):
-        tier = ReviewTier.TRACKING_SIGNAL
+    elif _maintenance_note(assessment):
+        tier = ReviewTier.MAINTENANCE_NOTE
     else:
         tier = ReviewTier.OBSERVATION
     return _apply_context_cap(tier, context)
@@ -77,8 +77,8 @@ def review_attention_score(assessment: SurfacingAssessment) -> float:
 
     Detection confidence answers whether a relation is real. This score answers
     whether that real relation deserves review time. Edit actions reuse their
-    gated edit-recommendation score; tracking actions only score when they carry
-    a high-value design concern.
+    gated edit-recommendation score; maintenance-note actions only score when
+    they carry a high-value design concern.
     """
 
     if assessment.action.action_kind in EDIT_ACTION_KINDS:
@@ -88,7 +88,9 @@ def review_attention_score(assessment: SurfacingAssessment) -> float:
                 round(max(0.0, assessment.action.recommendation_score), 4),
             )
         return round(max(0.0, assessment.action.recommendation_score), 4)
-    if assessment.action.action_kind in TRACKING_ACTION_KINDS and _design_concern(assessment):
+    if assessment.action.action_kind in MAINTENANCE_NOTE_ACTION_KINDS and _design_concern(
+        assessment
+    ):
         return _design_concern_attention_score(assessment)
     return 0.0
 
@@ -137,13 +139,13 @@ def _review_candidate(assessment: SurfacingAssessment, review_score: float) -> b
                 or assessment.action.status is RecommendationStatus.RECOMMENDED
             )
         )
-    if assessment.action.action_kind in TRACKING_ACTION_KINDS:
+    if assessment.action.action_kind in MAINTENANCE_NOTE_ACTION_KINDS:
         return _design_concern(assessment)
     return False
 
 
-def _tracking_signal(assessment: SurfacingAssessment) -> bool:
-    if assessment.action.action_kind in TRACKING_ACTION_KINDS:
+def _maintenance_note(assessment: SurfacingAssessment) -> bool:
+    if assessment.action.action_kind in MAINTENANCE_NOTE_ACTION_KINDS:
         return _score_band(assessment.detection.score, assessment.policy) in ATTENTION_BANDS
     if assessment.action.action_kind is ActionKind.DO_NOT_REFACTOR:
         return (
@@ -183,7 +185,7 @@ def classify_visibility(
         return _review_visibility(context.visibility)
     if review_tier in {ReviewTier.RECOMMENDED_EDIT, ReviewTier.REVIEW_CANDIDATE}:
         return FindingReviewVisibility.LISTED
-    if review_tier is ReviewTier.TRACKING_SIGNAL:
+    if review_tier is ReviewTier.MAINTENANCE_NOTE:
         return FindingReviewVisibility.GROUPED
     return FindingReviewVisibility.SIDECAR_ONLY
 
@@ -226,17 +228,17 @@ def _apply_context_cap(
         return tier
     if not context.summary_eligible:
         return (
-            ReviewTier.TRACKING_SIGNAL
+            ReviewTier.MAINTENANCE_NOTE
             if tier in {ReviewTier.RECOMMENDED_EDIT, ReviewTier.REVIEW_CANDIDATE}
             else ReviewTier.OBSERVATION
         )
     if _value(context.refactor_safety) == "unsafe":
         return ReviewTier.OBSERVATION
-    if context.action in TRACKING_ACTION_KINDS and tier in {
+    if context.action in MAINTENANCE_NOTE_ACTION_KINDS and tier in {
         ReviewTier.RECOMMENDED_EDIT,
         ReviewTier.REVIEW_CANDIDATE,
     }:
-        return ReviewTier.TRACKING_SIGNAL
+        return ReviewTier.MAINTENANCE_NOTE
     if tier is ReviewTier.RECOMMENDED_EDIT and _refactor_value(context.refactor_value) in {
         AssessmentBand.NONE,
         AssessmentBand.LOW,

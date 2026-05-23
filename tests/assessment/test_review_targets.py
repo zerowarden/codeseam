@@ -145,7 +145,7 @@ def test_small_clean_clone_is_recommended_edit() -> None:
                 FunctionSemanticRole.COMPARISON_PROTOCOL.value: 2,
             },
             {"protocol_member_count": 2},
-            "tracking_signal",
+            "maintenance_note",
             ActionKind.RECORD_SHARED_CONCERN,
             "record_shared_concern",
         ),
@@ -159,21 +159,21 @@ def test_small_clean_clone_is_recommended_edit() -> None:
         (
             {FunctionSemanticRole.ADAPTER_FORWARDER.value: 2},
             {"api_surface_member_count": 2},
-            "tracking_signal",
+            "maintenance_note",
             ActionKind.RECORD_SHARED_CONCERN,
             "record_shared_concern",
         ),
         (
             {FunctionSemanticRole.IMPLEMENTATION_CONTRACT_METHOD.value: 2},
             {"api_surface_member_count": 2},
-            "tracking_signal",
+            "maintenance_note",
             ActionKind.RECORD_SHARED_CONCERN,
             "record_shared_concern",
         ),
         (
             {FunctionSemanticRole.FRAMEWORK_CONNECTOR.value: 2},
             {"api_surface_member_count": 2},
-            "tracking_signal",
+            "maintenance_note",
             ActionKind.RECORD_SHARED_CONCERN,
             "record_shared_concern",
         ),
@@ -270,7 +270,7 @@ def test_constructor_majority_steers_to_shared_helper_review() -> None:
     assert target.primary_action == ActionKind.EXTRACT_SMALL_HELPER
 
 
-def test_tiny_constructor_majority_is_tracking_signal() -> None:
+def test_tiny_constructor_majority_is_maintenance_note() -> None:
     target = _assess(
         _clean_clone_metrics(
             role_counts={
@@ -287,12 +287,12 @@ def test_tiny_constructor_majority_is_tracking_signal() -> None:
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
 
 
 def test_public_api_mirror_needs_substantial_local_evidence_for_review() -> None:
-    tracking = _assess(
+    maintenance_note = _assess(
         _clean_clone_metrics(
             role_counts={FunctionSemanticRole.PUBLIC_API_MIRROR.value: 2},
             body_lines=6,
@@ -315,8 +315,8 @@ def test_public_api_mirror_needs_substantial_local_evidence_for_review() -> None
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert tracking.review_tier is ReviewTier.TRACKING_SIGNAL
-    assert tracking.primary_action == ActionKind.RECORD_SHARED_CONCERN
+    assert maintenance_note.review_tier is ReviewTier.MAINTENANCE_NOTE
+    assert maintenance_note.primary_action == ActionKind.RECORD_SHARED_CONCERN
     assert review.review_tier is ReviewTier.REVIEW_CANDIDATE
     assert review.action_status is FindingActionStatus.CAUTIOUS_CANDIDATE
     assert review.primary_action == ActionKind.RECORD_SHARED_CONCERN
@@ -335,11 +335,11 @@ def test_public_api_mirror_does_not_relax_from_one_large_member() -> None:
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
 
 
-def test_command_registry_surface_caps_edit_to_tracking_signal() -> None:
+def test_command_registry_surface_caps_edit_to_maintenance_note() -> None:
     target = _assess(
         _clean_clone_metrics(
             role_counts={FunctionSemanticRole.COMMAND_OR_REGISTRY_SURFACE.value: 2},
@@ -352,12 +352,12 @@ def test_command_registry_surface_caps_edit_to_tracking_signal() -> None:
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
     assert any("adapter/API boundary" in reason for reason in target.downgrade_reasons)
 
 
-def test_parameterized_predicate_boundary_caps_to_tracking_signal() -> None:
+def test_parameterized_predicate_boundary_caps_to_maintenance_note() -> None:
     metrics = _clean_clone_metrics(
         role_counts={FunctionSemanticRole.PREDICATE_BOUNDARY.value: 2},
         body_lines=3,
@@ -376,7 +376,7 @@ def test_parameterized_predicate_boundary_caps_to_tracking_signal() -> None:
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
     assert any("predicate boundary variants" in reason for reason in target.downgrade_reasons)
 
@@ -416,7 +416,7 @@ def test_sparse_promoted_pair_evidence_caps_broad_parent_cluster() -> None:
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
     assert any("Exact pair evidence was promoted" in reason for reason in target.downgrade_reasons)
 
@@ -443,7 +443,7 @@ def test_promoted_pair_parent_cap_wins_over_test_review_cap() -> None:
         evidence_kinds=(EvidenceKind.SIGNATURE_SHAPE_CLUSTER,),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
     assert any("Exact pair evidence was promoted" in reason for reason in target.downgrade_reasons)
 
@@ -489,8 +489,8 @@ def test_protocol_singleton_duplicate_pair_caps_mixed_cluster() -> None:
         cap=cap,
     )
 
-    assert cap.cap == RecommendationCap.MAX_TRACKING_SIGNAL
-    assert capped.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert cap.cap == RecommendationCap.MAX_MAINTENANCE_NOTE
+    assert capped.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert capped.primary_action == ActionKind.RECORD_SHARED_CONCERN
     assert any("protocol/API methods" in reason for reason in capped.downgrade_reasons)
 
@@ -606,7 +606,7 @@ def test_test_duplicate_pair_caps_mixed_cluster_to_review_candidate() -> None:
     assert capped.primary_action == ActionKind.RECORD_SHARED_CONCERN
 
 
-def test_test_member_in_mixed_cluster_caps_whole_target_to_review_candidate() -> None:
+def test_test_member_cap_does_not_promote_maintenance_note_to_review_candidate() -> None:
     cap = semantic_cap_for(
         FindingMetrics(
             member_count=8,
@@ -620,12 +620,21 @@ def test_test_member_in_mixed_cluster_caps_whole_target_to_review_candidate() ->
         ),
         POLICY,
     )
+    capped = apply_semantic_cap(
+        review_tier=ReviewTier.MAINTENANCE_NOTE,
+        primary_action=ActionKind.RECORD_SHARED_CONCERN,
+        action_status=FindingActionStatus.RECORD_SHARED_CONCERN,
+        cap=cap,
+    )
 
     assert cap.cap == RecommendationCap.MAX_REVIEW_CANDIDATE
-    assert cap.review_floor is ReviewTier.REVIEW_CANDIDATE
+    assert capped.review_tier is ReviewTier.MAINTENANCE_NOTE
+    assert capped.primary_action == ActionKind.RECORD_SHARED_CONCERN
+    assert capped.action_status is FindingActionStatus.RECORD_SHARED_CONCERN
+    assert capped.downgrade_reasons == ()
 
 
-def test_test_duplicate_pair_does_not_disappear_from_review_surface() -> None:
+def test_test_duplicate_pair_with_low_value_action_stays_maintenance_note() -> None:
     metrics = _clean_clone_metrics(
         role_counts={
             FunctionSemanticRole.TEST_CODE.value: 2,
@@ -654,9 +663,8 @@ def test_test_duplicate_pair_does_not_disappear_from_review_surface() -> None:
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert target.review_tier is ReviewTier.REVIEW_CANDIDATE
-    assert target.primary_action is ActionKind.RECORD_SHARED_CONCERN
-    assert target.visibility is FindingReviewVisibility.LISTED
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
+    assert target.primary_action is ActionKind.DO_NOT_REFACTOR
 
 
 def test_repeated_protocol_duplicate_pairs_below_material_ratio_do_not_cap_mixed_cluster() -> None:
@@ -696,7 +704,7 @@ def test_repeated_protocol_duplicate_pairs_at_material_ratio_cap_mixed_cluster()
         POLICY,
     )
 
-    assert cap.cap == RecommendationCap.MAX_TRACKING_SIGNAL
+    assert cap.cap == RecommendationCap.MAX_MAINTENANCE_NOTE
 
 
 def test_example_singleton_duplicate_pair_caps_mixed_cluster_to_observation() -> None:
@@ -833,7 +841,7 @@ def test_declaration_only_cluster_is_observation_not_edit() -> None:
     assert any("declaration" in reason for reason in target.downgrade_reasons)
 
 
-def test_declaration_api_surface_caps_to_tracking_signal() -> None:
+def test_declaration_api_surface_caps_to_maintenance_note() -> None:
     target = _assess(
         _clean_clone_metrics(
             role_counts={
@@ -854,7 +862,7 @@ def test_declaration_api_surface_caps_to_tracking_signal() -> None:
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
     assert any("declaration/API" in reason for reason in target.downgrade_reasons)
 
@@ -1183,12 +1191,12 @@ def test_introduce_abstraction_without_hole_evidence_records_shared_concern() ->
         abstraction_kind=AbstractionKind.EXTRACT_HELPER,
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.action_status is FindingActionStatus.RECORD_SHARED_CONCERN
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
 
 
-def test_high_detection_low_value_tracking_action_is_not_review_candidate() -> None:
+def test_high_detection_low_value_note_action_is_not_review_candidate() -> None:
     target = _assess(
         {
             "member_count": 2,
@@ -1201,7 +1209,7 @@ def test_high_detection_low_value_tracking_action_is_not_review_candidate() -> N
         actions=(_action(ActionKind.RECORD_SHARED_CONCERN, confidence=0.95),),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.review_score == 0.0
     assert target.visibility is FindingReviewVisibility.GROUPED
 
@@ -1245,11 +1253,11 @@ def test_context_can_cap_numeric_review_tier() -> None:
         _context(summary_eligible=False),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.visibility is FindingReviewVisibility.SIDECAR_ONLY
 
 
-def test_tracking_context_caps_review_candidate() -> None:
+def test_maintenance_note_context_caps_review_candidate() -> None:
     target = _assess_context(
         {
             "member_count": 3,
@@ -1268,7 +1276,7 @@ def test_tracking_context_caps_review_candidate() -> None:
         _context(summary_eligible=True),
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.visibility is FindingReviewVisibility.SIDECAR_ONLY
 
 
@@ -1297,7 +1305,7 @@ def test_observation_tier_forces_sidecar_visibility() -> None:
     assert target.visibility is FindingReviewVisibility.SIDECAR_ONLY
 
 
-def test_policy_constant_duplicate_fit_can_still_be_tracking_signal() -> None:
+def test_policy_constant_duplicate_fit_can_still_be_maintenance_note() -> None:
     target = _assess(
         {
             "member_count": 2,
@@ -1315,7 +1323,7 @@ def test_policy_constant_duplicate_fit_can_still_be_tracking_signal() -> None:
         abstraction_kind=AbstractionKind.MOVE_MODULE,
     )
 
-    assert target.review_tier is ReviewTier.TRACKING_SIGNAL
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.INTRODUCE_ABSTRACTION
     assessment = _assessment(target)
     assert assessment.abstraction_fit.band is AssessmentBand.HIGH
@@ -1333,7 +1341,7 @@ def test_callable_factory_remains_low_tier_context() -> None:
         abstraction_kind=AbstractionKind.COMPILER_FACTORY,
     )
 
-    assert target.review_tier in {ReviewTier.TRACKING_SIGNAL, ReviewTier.OBSERVATION}
+    assert target.review_tier in {ReviewTier.MAINTENANCE_NOTE, ReviewTier.OBSERVATION}
     assert target.abstraction_kind == AbstractionKind.COMPILER_FACTORY
     assert "call_fingerprint_overlap" in target.evidence_classes
 

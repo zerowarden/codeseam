@@ -50,7 +50,7 @@ def ci_summary(targets: list[dict[str, object]]) -> str:
             "findings": {
                 ReviewTier.RECOMMENDED_EDIT: recommended,
                 ReviewTier.REVIEW_CANDIDATE: review,
-                ReviewTier.TRACKING_SIGNAL: 0,
+                ReviewTier.MAINTENANCE_NOTE: 0,
                 ReviewTier.OBSERVATION: 0,
             },
             "ci": {
@@ -173,7 +173,7 @@ def agent_payload_fixture(
     failed: tuple[AssessmentGate, ...],
 ) -> Finding:
     decision = FindingDecision(
-        review_tier=ReviewTier.TRACKING_SIGNAL,
+        review_tier=ReviewTier.MAINTENANCE_NOTE,
         review_score=0.0,
         action_status=FindingActionStatus.RECORD_SHARED_CONCERN,
         primary_action=ActionKind.RECORD_SHARED_CONCERN,
@@ -189,7 +189,7 @@ def agent_payload_fixture(
     return Finding(
         target_type=FindingTargetType.SIGNATURE_SHAPE,
         title="Failed gate fixture",
-        review_tier=ReviewTier.TRACKING_SIGNAL,
+        review_tier=ReviewTier.MAINTENANCE_NOTE,
         review_score=0.0,
         action_status=FindingActionStatus.RECORD_SHARED_CONCERN,
         primary_action=ActionKind.RECORD_SHARED_CONCERN,

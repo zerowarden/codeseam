@@ -30,9 +30,9 @@
 - Recommended-edit tier targets: {{ metrics.recommended_edit_tier_count|md_code }}
 - Recommended edits: {{ metrics.recommended_edit_count|md_code }}
 ## Fields
-- `review_tier` says where to look first: `recommended_edit`, `review_candidate`, `tracking_signal`, or `observation`.
+- `review_tier` says where to look first: `recommended_edit`, `review_candidate`, `maintenance_note`, or `observation`.
 - `review_score` is the internal ranking score used to assign the review tier.
-- `action_status` says whether Codeseam recommends an edit, cautious inspection, concern tracking, observation, or no refactor.
+- `action_status` says whether Codeseam recommends an edit, cautious inspection, a recorded concern, observation, or no refactor.
 - `primary_action` is the action ladder recommendation such as `consolidate_clone` or `record_shared_concern`.
 - `visibility` describes presentation: `listed`, `grouped`, or `sidecar_only`.
 - `summary_eligible` controls whether a review target appears in `agent/summary.md`.

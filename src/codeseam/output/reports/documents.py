@@ -48,14 +48,15 @@ def build_metrics(
     observations: list[Json],
     findings: list[Json],
 ) -> Json:
+    agent_visible_targets = [
+        target for target in analysis_targets if is_agent_summary_target(target)
+    ]
     return {
         "schema_version": "codeseam.metrics.v1",
         "summary": as_json_object(report.get("summary")),
         "analysis_target_count": len(analysis_targets),
         "observation_count": len(observations),
-        "agent_visible_target_count": sum(
-            1 for target in analysis_targets if is_agent_summary_target(target)
-        ),
+        "agent_visible_target_count": len(agent_visible_targets),
         "internal_finding_count": len(findings),
         "recommended_edit_tier_count": _counts_by_review_tier(
             [*analysis_targets, *observations]
@@ -63,7 +64,7 @@ def build_metrics(
             ReviewTier.RECOMMENDED_EDIT,
             0,
         ),
-        "recommended_edit_count": _counts_by_action_status([*analysis_targets, *observations]).get(
+        "recommended_edit_count": _counts_by_action_status(agent_visible_targets).get(
             FindingActionStatus.RECOMMENDED_EDIT, 0
         ),
         "artifact_index": as_json_object(report.get("artifact_index")),

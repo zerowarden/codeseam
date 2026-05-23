@@ -25,7 +25,7 @@ def test_analyze_ci_outputs_compact_summary_only(cli_runner: CliRunner) -> None:
             "Analysis:",
             f"{REVIEW_TIER_LABELS[ReviewTier.RECOMMENDED_EDIT]}: 0",
             REVIEW_TIER_LABELS[ReviewTier.REVIEW_CANDIDATE],
-            REVIEW_TIER_LABELS[ReviewTier.TRACKING_SIGNAL],
+            REVIEW_TIER_LABELS[ReviewTier.MAINTENANCE_NOTE],
             REVIEW_TIER_LABELS[ReviewTier.OBSERVATION],
             "CI surface:",
             "No failing targets surfaced.",

@@ -15,7 +15,7 @@ ANALYSIS_REVIEW_TIERS: frozenset[str] = frozenset(
     {
         ReviewTier.RECOMMENDED_EDIT.value,
         ReviewTier.REVIEW_CANDIDATE.value,
-        ReviewTier.TRACKING_SIGNAL.value,
+        ReviewTier.MAINTENANCE_NOTE.value,
     }
 )
 
@@ -85,7 +85,7 @@ def is_review_surface_target(target: Json) -> bool:
         return False
     if _low_refactorability(target):
         return False
-    return not _is_tracking_action(target)
+    return not _is_maintenance_note_action(target)
 
 
 def _low_refactorability(target: Json) -> bool:
@@ -98,7 +98,7 @@ def _low_refactorability(target: Json) -> bool:
     )
 
 
-def _is_tracking_action(target: Json) -> bool:
+def _is_maintenance_note_action(target: Json) -> bool:
     return _text(target.get("action_status")) in {
         FindingActionStatus.RECORD_SHARED_CONCERN.value,
         FindingActionStatus.OBSERVE.value,

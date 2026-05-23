@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 from codeseam.adapters.repository.root import detect_repo_root
+from codeseam.adapters.repository.scan_manifest import scan_manifest_path
 from codeseam.analysis import (
+    FileRecord,
     RepositoryScan,
     build_repository_facts,
     classify_path,
@@ -301,11 +303,67 @@ def test_repository_facts_cache_value_round_trips_without_json_payload(tmp_path:
     assert restored.roles_by_path == facts.roles_by_path
 
 
+def test_scan_manifest_reuses_content_hash_but_recomputes_role(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "src" / "app.py"
+    write_atomic(source, "def app():\n    return 1\n")
+    first = _scan(tmp_path)
+    first_record = _record_by_path(first, "src/app.py")
+    assert first_record.role == "source"
+
+    write_atomic(
+        tmp_path / "pyproject.toml",
+        "[tool.pytest.ini_options]\ntestpaths = ['src']\n",
+    )
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes(path: Path) -> bytes:
+        if path == source:
+            raise AssertionError("scan manifest hit should not reread unchanged file bytes")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    second_record = _record_by_path(_scan(tmp_path), "src/app.py")
+    assert second_record.content_hash == first_record.content_hash
+    assert second_record.line_count == first_record.line_count
+    assert second_record.role == "test"
+
+
+def test_scan_manifest_rehashes_when_file_stat_changes(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "app.py"
+    write_atomic(source, "def app():\n    return 1\n")
+    first_record = _record_by_path(_scan(tmp_path), "src/app.py")
+
+    write_atomic(source, "def app():\n    return 2\n")
+
+    second_record = _record_by_path(_scan(tmp_path), "src/app.py")
+    assert second_record.content_hash != first_record.content_hash
+
+
+def test_scan_manifest_invalid_payload_degrades_to_full_scan(tmp_path: Path) -> None:
+    config = load_config(tmp_path)
+    manifest_path = scan_manifest_path(config.cache_path())
+    write_atomic(manifest_path, "{not json")
+    write_atomic(tmp_path / "src" / "app.py", "def app():\n    return 1\n")
+
+    record = _record_by_path(_scan(tmp_path), "src/app.py")
+
+    assert record.content_hash.startswith("sha256:")
+    assert "schema_version" in manifest_path.read_text(encoding="utf-8")
+
+
 def _scan(root: Path) -> RepositoryScan:
     config = load_config(root)
     paths = OutputPaths(config.path("output", "root"))
     paths.ensure_audit()
     return scan_repository(config, paths, write_artifacts=True)
+
+
+def _record_by_path(scan: RepositoryScan, path: str) -> FileRecord:
+    return next(record for record in scan.records if record.path == path)
 
 
 def _init_git_repo(root: Path) -> None:
