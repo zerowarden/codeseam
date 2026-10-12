@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
+from typing import Protocol
 
 from codeseam.analysis.relations.clones import clone_classification_for
 from codeseam.analysis.relations.members import has_error_evidence
@@ -66,43 +68,78 @@ ActionBuilder = Callable[[PairActionInput], list[RefactorAction]]
 TreeComparisonProvider = Callable[[MemberFeatures, MemberFeatures], TreeComparison]
 
 
+@dataclass(frozen=True, slots=True)
+class CachedPair:
+    """A stored comparison result: a relation pair, or `None` for "no relation"."""
+
+    pair: RelationPair | None
+
+
+type FeaturePair = tuple[MemberFeatures, MemberFeatures]
+
+
+class PairCache(Protocol):
+    """Where comparison results are stored between runs; the algorithm stays here."""
+
+    def get_many(self, pairs: Sequence[FeaturePair]) -> list[CachedPair | None]: ...
+
+    def set_many(self, results: Sequence[tuple[FeaturePair, RelationPair | None]]) -> None: ...
+
+    def compare_trees(
+        self, left: MemberFeatures, right: MemberFeatures, stats: dict[str, int] | None
+    ) -> TreeComparison: ...
+
+
 def relation_pairs(
     candidate_pairs: Sequence[tuple[MemberInput, MemberInput]],
     *,
     action_builder: ActionBuilder,
     feature_cache: MemberFeatureCache | None = None,
     stats: dict[str, int] | None = None,
+    cache: PairCache | None = None,
 ) -> list[RelationPair]:
+    """Compare each candidate pair and keep the strongest relations.
+
+    With a `cache`, stored results are reused and new ones are stored; the
+    result is the same as without one.
+    """
+
     increment_stat(stats, "candidate_pair_count", len(candidate_pairs))
     if not candidate_pairs:
         return []
-    cache = feature_cache or MemberFeatureCache(
-        [member for pair in candidate_pairs for member in pair]
-    )
-    candidate_members = [member for pair in candidate_pairs for member in pair]
-    feature_by_member_id = {
-        id(member): features for member, features in cache.entries(candidate_members)
-    }
-    candidates = [
-        (
-            left,
-            right,
-            feature_by_member_id[id(left)],
-            feature_by_member_id[id(right)],
-        )
-        for left, right in candidate_pairs
-    ]
+    members = [member for pair in candidate_pairs for member in pair]
+    features = feature_cache or MemberFeatureCache(members)
+    by_member = {id(member): item for member, item in features.entries(members)}
+    feature_pairs = [(by_member[id(left)], by_member[id(right)]) for left, right in candidate_pairs]
+    hits = cache.get_many(feature_pairs) if cache else [None] * len(feature_pairs)
+
+    def compare_trees(left: MemberFeatures, right: MemberFeatures) -> TreeComparison:
+        if cache is None:
+            return tree_comparison_features(left, right)
+        return cache.compare_trees(left, right, stats)
+
     pairs: list[RelationPair] = []
-    for _, _, left_features, right_features in candidates:
-        pair = relation_pair_from_features(
-            left_features,
-            right_features,
-            action_builder=action_builder,
-            stats=stats,
-        )
+    computed: list[tuple[FeaturePair, RelationPair | None]] = []
+    for (left, right), hit in zip(feature_pairs, hits, strict=True):
+        if hit is not None:
+            increment_stat(stats, "cache_hit_count")
+            pair = hit.pair
+        else:
+            if cache is not None:
+                increment_stat(stats, "cache_miss_count")
+            pair = relation_pair_from_features(
+                left,
+                right,
+                action_builder=action_builder,
+                stats=stats,
+                tree_comparison_provider=compare_trees,
+            )
+            computed.append(((left, right), pair))
         if pair is not None:
             pairs.append(pair)
             increment_stat(stats, "scored_relation_pair_count")
+    if cache is not None and computed:
+        cache.set_many(computed)
     result = sorted(
         pairs,
         key=lambda item: (

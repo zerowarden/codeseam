@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from codeseam.analysis.assessment.definitions import FindingActionStatus, ReviewTier
+from codeseam.analysis.findings.definitions import FindingActionStatus, ReviewTier
 from codeseam.analysis.findings.models import Finding
 
 ANALYSIS_REVIEW_TIERS = frozenset(

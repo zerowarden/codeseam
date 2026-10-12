@@ -11,6 +11,8 @@ This document describes how Codeseam reads each language, the vocabulary that al
 
 Codeseam compares functions only inside one language family. A Python function never pairs with a TypeScript function.
 
+Codeseam also recognizes source files in some languages that it cannot analyse: Go, Rust, Java, Kotlin, Swift, Ruby, PHP, C#, C, C++ and Scala. It counts them in the completeness summary, so that a report on such a repository is not mistaken for a complete one.
+
 ## The adapter interface
 
 A language adapter changes source files into language-neutral records. The `analysis/` package then works only with these records.

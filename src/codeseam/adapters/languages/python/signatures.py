@@ -33,6 +33,7 @@ from codeseam.analysis import (
     callsite_evidence_kinds,
     is_callable_return,
 )
+from codeseam.analysis.completeness import PYTHON_PARSE_ERROR
 from codeseam.platform import normalize_identifier
 
 UNKNOWN = "UNKNOWN"
@@ -51,7 +52,7 @@ def extract_python_analysis(
         return LanguageAdapterAnalysis(
             functions=(),
             signatures=(),
-            diagnostics=(f"python_parse_error: {error.msg} (line {max(1, error.lineno or 1)})",),
+            diagnostics=(f"{PYTHON_PARSE_ERROR}: {error.msg} (line {max(1, error.lineno or 1)})",),
         )
     if parsed.tree is None:
         return LanguageAdapterAnalysis(functions=(), signatures=())

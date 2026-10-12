@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from codeseam.analysis.assessment.definitions import FindingActionStatus, ReviewTier
 from codeseam.analysis.assessment.policy import (
     AssessmentPolicy,
     RecommendationCap,
@@ -13,6 +12,7 @@ from codeseam.analysis.assessment.relation_evidence import (
     has_relation_kind,
 )
 from codeseam.analysis.findings import FindingMetrics, RoleEvidenceCounts
+from codeseam.analysis.findings.definitions import FindingActionStatus, ReviewTier
 from codeseam.analysis.relations.models import ActionKind, RelationKind
 from codeseam.analysis.semantic_roles import (
     DECLARATION_SURFACE_ROLES,

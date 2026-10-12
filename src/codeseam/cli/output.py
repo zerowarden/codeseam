@@ -23,6 +23,7 @@ from codeseam.output.serializers.titles import (
     display_reason_label,
     display_sentence,
 )
+from codeseam.pipeline.doctor import CheckStatus, DoctorReport
 from codeseam.platform import (
     Json,
     as_json_object,
@@ -33,6 +34,7 @@ from codeseam.platform import (
     json_int,
     plural_noun,
     single_line,
+    text_list,
 )
 from codeseam.profiling import ClusterProfileRow, ProfileOutput
 from codeseam.version import package_version
@@ -316,7 +318,33 @@ def _render_init_result(
     _write_plain("\n".join(lines) + "\n")
 
 
+DOCTOR_STATUS_STYLES = {
+    CheckStatus.OK: "green",
+    CheckStatus.INFO: "dim",
+    CheckStatus.WARN: "yellow",
+    CheckStatus.FAIL: "bold red",
+}
+
+
+def _render_doctor_result(report: DoctorReport) -> None:
+    console = Console()
+    console.print(f"Codeseam doctor: {report.repo_root}", highlight=False)
+    area = ""
+    for check in report.checks:
+        if check.area != area:
+            area = check.area
+            console.print(f"\n[bold]{area.capitalize()}[/bold]")
+        status = f"[{DOCTOR_STATUS_STYLES[check.status]}]{check.status.value:<4}[/]"
+        console.print(f"  {status}  {check.name}: {check.detail}", highlight=False)
+    counts = report.counts()
+    console.print(
+        f"\n{counts['fail']} failed, {counts['warn']} warnings, {counts['ok']} ok.",
+        highlight=False,
+    )
+
+
 _OUTPUT_RENDERERS: dict[str, Callable[[CliOutput], None]] = {
+    "doctor_result": DataRenderer(_render_doctor_result, ("report",)),
     "none": DataRenderer(_render_none, ()),
     "help": DataRenderer(_render_help, ("parser", "stderr"), {"stderr": False}),
     "error": DataRenderer(_render_error_output, ("message", "prefix"), {"prefix": "error"}),
@@ -399,6 +427,7 @@ def render_default_analyze_result(result: Json, options: OutputOptions) -> None:
         Text(_analysis_summary_line(summary, timings)),
         Text(_language_summary_line(summary)),
         Text(_function_summary_line(summary, findings)),
+        _coverage_line(as_json_object(result.get("completeness"))),
         Text(),
         Text("Analysis:"),
         *_finding_lines(findings),
@@ -419,6 +448,16 @@ def render_default_analyze_result(result: Json, options: OutputOptions) -> None:
             )
         )
     console.print(Group(*lines))
+
+
+def _coverage_line(completeness: Json) -> Text:
+    coverage = str(completeness.get("coverage") or "unknown")
+    reasons = [str(item) for item in text_list(completeness.get("reasons"))]
+    text = Text("Coverage: ")
+    text.append(coverage, style="green" if coverage == "complete" else "bold yellow")
+    if reasons:
+        text.append(" (" + "; ".join(reasons) + ")")
+    return text
 
 
 def render_ci_analyze_result(result: Json, options: OutputOptions) -> None:

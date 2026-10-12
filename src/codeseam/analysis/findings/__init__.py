@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codeseam.analysis.assessment.definitions import (
+from codeseam.analysis.findings.definitions import (
     REVIEW_TIER_ORDER,
     REVIEW_TIERS,
     FindingActionStatus,

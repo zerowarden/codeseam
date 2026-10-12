@@ -9,6 +9,22 @@ class LanguageFamily(StrEnum):
     ECMASCRIPT_TYPESCRIPT = "ecmascript_typescript"
 
 
+class ExtractionConfidence(StrEnum):
+    UNKNOWN = "unknown"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+    @property
+    def rank(self) -> int:
+        return {
+            ExtractionConfidence.UNKNOWN: 0,
+            ExtractionConfidence.LOW: 1,
+            ExtractionConfidence.MEDIUM: 2,
+            ExtractionConfidence.HIGH: 3,
+        }[self]
+
+
 class AdapterId(StrEnum):
     UNKNOWN = "unknown"
     PYTHON_AST = "python_ast"
@@ -33,4 +49,4 @@ def adapter_id(value: object) -> AdapterId:
         return AdapterId.UNKNOWN
 
 
-__all__ = ["AdapterId", "LanguageFamily", "adapter_id", "language_family"]
+__all__ = ["AdapterId", "ExtractionConfidence", "LanguageFamily", "adapter_id", "language_family"]

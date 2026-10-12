@@ -65,7 +65,15 @@ flowchart LR
    uv run --project /path/to/codeseam codeseam init
    ```
 
-3. Do the analysis:
+3. Optional: make sure that Codeseam can analyse the repository:
+
+   ```bash
+   uv run --project /path/to/codeseam codeseam doctor
+   ```
+
+   `doctor` checks the Python version, the configuration, the report and cache directories, the parsers and the files to analyse. It does not analyse the code.
+
+4. Do the analysis:
 
    ```bash
    uv run --project /path/to/codeseam codeseam analyze
@@ -73,9 +81,9 @@ flowchart LR
 
    To analyse a different directory, give its path: `codeseam analyze /path/to/repo`.
 
-4. Read the summary in `.codeseam/reports/agent/summary.md`.
+5. Read the summary in `.codeseam/reports/agent/summary.md`. Look at the **Analysis Completeness** section first. A run with no findings means "no repetition" only when its coverage is `complete`.
 
-5. For more data about one finding, use its target ID:
+6. For more data about one finding, use its target ID:
 
    ```bash
    uv run --project /path/to/codeseam codeseam explain rt_0123456789ab
@@ -108,6 +116,7 @@ For each field and file, refer to [Reports](reports.md).
 | `codeseam cache` | Shows the size and location of the cache. |
 | `codeseam cache clear` | Deletes the cache. |
 | `codeseam init` | Creates `codeseam.toml` and `.codeseamignore`. |
+| `codeseam doctor` | Checks that an analysis can run. It does not analyse the code. Add `--json` for JSON. |
 
 ## Next steps
 

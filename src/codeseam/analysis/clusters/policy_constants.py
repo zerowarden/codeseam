@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterator
 from dataclasses import dataclass
 
-from codeseam.analysis.assessment.cluster.models import PolicyConstantCluster, PolicyConstantMatch
+from codeseam.analysis.clusters.models import PolicyConstantCluster, PolicyConstantMatch
 from codeseam.analysis.relations import (
     AbstractionKind,
     ActionKind,

@@ -289,7 +289,18 @@ Codeseam gives the finding a review tier. The rules are in `analysis/assessment/
 
 A finding is **summary eligible** when it is listed and worth an edit. Codeseam decides this on the typed finding, before it writes a file.
 
+Before it ranks the findings, Codeseam removes repeats:
+
+- When two findings have the same members, it keeps the stronger one.
+- When a recommended edit or a review candidate covers all members of another finding with the same action, it removes the smaller finding. A broad maintenance note never hides a smaller, more precise finding.
+
 Finally, Codeseam ranks the findings and gives each one a target ID. The ID uses the kind of finding and its members, but not the verdict. Thus the ID stays the same when the tier changes.
+
+## Completeness
+
+Each run records how much of the repository it covered: the files that parsed, failed or changed, the source files in unsupported languages, the comparison limits that cut off pairs, and the evidence methods that ran. The run is `complete`, `partial` or `insufficient`. Refer to [Reports](reports.md#completeness).
+
+Module: `analysis/completeness.py`.
 
 ## Determinism
 

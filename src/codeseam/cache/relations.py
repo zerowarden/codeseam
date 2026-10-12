@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from codeseam.analysis import (
-    PAIR_POLICY,
-    ActionBuilder,
-    MemberFeatureCache,
+    CachedPair,
+    FeaturePair,
     MemberFeatures,
-    MemberInput,
     RelationPair,
-    RelationPairBuilder,
     TreeComparison,
-    relation_pair_from_features,
     tree_comparison_features,
 )
 from codeseam.cache.blobs import load_cache_blob
@@ -33,29 +29,23 @@ TREE_COMPARISON_CACHE_NAMESPACE = "tree_comparisons"
 TREE_COMPARISON_CACHE_VALUE_LENGTH = 6
 
 __all__ = [
-    "cached_relation_pair_builder",
-    "cached_relation_pairs",
-    "cached_tree_comparison_provider",
+    "RelationPairStore",
+    "relation_pair_store",
     "relation_pair_cache_key",
     "tree_comparison_features",
 ]
 
 
 @dataclass(frozen=True, slots=True)
-class CachedRelationPairValue:
-    pair: RelationPair | None
-
-
-@dataclass(frozen=True, slots=True)
-class _RelationPairCacheCodec(CacheCodec[CachedRelationPairValue]):
+class _RelationPairCacheCodec(CacheCodec[CachedPair]):
     namespace: str = RELATION_PAIR_CACHE_NAMESPACE
 
-    def dump(self, value: CachedRelationPairValue) -> object:
+    def dump(self, value: CachedPair) -> object:
         return relation_pair_cache_value(value.pair)
 
-    def load(self, value: object) -> CachedRelationPairValue | None:
+    def load(self, value: object) -> CachedPair | None:
         cached, pair = relation_pair_from_cache_value(value)
-        return CachedRelationPairValue(pair) if cached else None
+        return CachedPair(pair) if cached else None
 
 
 _RELATION_PAIR_CACHE = _RelationPairCacheCodec()
@@ -76,118 +66,43 @@ class _TreeComparisonCacheCodec(CacheCodec[TreeComparison]):
 _TREE_COMPARISON_CACHE = _TreeComparisonCacheCodec()
 
 
-def cached_relation_pair_builder(caches: AnalysisCacheContext | None) -> RelationPairBuilder | None:
-    if caches is None:
-        return None
+@dataclass(frozen=True, slots=True)
+class RelationPairStore:
+    """`PairCache` backed by the persistent cache: stores pairs and tree comparisons."""
 
-    def build(
-        candidate_pairs: Sequence[tuple[MemberInput, MemberInput]],
-        *,
-        action_builder: ActionBuilder,
-        feature_cache: MemberFeatureCache,
-        stats: dict[str, int],
-    ) -> list[RelationPair]:
-        return cached_relation_pairs(
-            candidate_pairs,
-            action_builder=action_builder,
-            feature_cache=feature_cache,
-            stats=stats,
-            caches=caches,
-        )
+    caches: AnalysisCacheContext
 
-    return build
+    def get_many(self, pairs: Sequence[FeaturePair]) -> list[CachedPair | None]:
+        if not self.caches.relation_pair_enabled:
+            return [None] * len(pairs)
+        keys = [relation_pair_cache_key(left, right) for left, right in pairs]
+        found = self.caches.cache(_RELATION_PAIR_CACHE).get_many(keys)
+        return [found.get(key) for key in keys]
 
-
-def cached_relation_pairs(  # noqa: PLR0913
-    candidate_pairs: Sequence[tuple[MemberInput, MemberInput]],
-    *,
-    action_builder: ActionBuilder,
-    feature_cache: MemberFeatureCache,
-    stats: dict[str, int],
-    caches: AnalysisCacheContext,
-) -> list[RelationPair]:
-    increment_stat(stats, "candidate_pair_count", len(candidate_pairs))
-    if not candidate_pairs:
-        return []
-    candidate_members = [member for pair in candidate_pairs for member in pair]
-    feature_by_member_id = {
-        id(member): features for member, features in feature_cache.entries(candidate_members)
-    }
-    candidates = [
-        (
-            left,
-            right,
-            feature_by_member_id[id(left)],
-            feature_by_member_id[id(right)],
-        )
-        for left, right in candidate_pairs
-    ]
-    cache_keys = [
-        relation_pair_cache_key(left_features, right_features)
-        for _, _, left_features, right_features in candidates
-    ]
-    cached_values: dict[str, CachedRelationPairValue] = {}
-    if caches.relation_pair_enabled:
-        cached_values = caches.cache(_RELATION_PAIR_CACHE).get_many(cache_keys)
-    tree_comparison_provider = cached_tree_comparison_provider(caches, stats)
-    pairs: list[RelationPair] = []
-    relation_pair_payloads: dict[str, CachedRelationPairValue] = {}
-    for cache_key, (_, _, left_features, right_features) in zip(
-        cache_keys,
-        candidates,
-        strict=True,
-    ):
-        cached_value = cached_values.get(cache_key)
-        if cached_value is None:
-            increment_stat(stats, "cache_miss_count")
-            pair = relation_pair_from_features(
-                left_features,
-                right_features,
-                action_builder=action_builder,
-                stats=stats,
-                tree_comparison_provider=tree_comparison_provider,
+    def set_many(self, results: Sequence[tuple[FeaturePair, RelationPair | None]]) -> None:
+        if self.caches.relation_pair_enabled:
+            self.caches.cache(_RELATION_PAIR_CACHE).set_many(
+                {relation_pair_cache_key(*pair): CachedPair(result) for pair, result in results}
             )
-            if caches.relation_pair_enabled:
-                relation_pair_payloads[cache_key] = CachedRelationPairValue(pair)
-        else:
-            increment_stat(stats, "cache_hit_count")
-            pair = cached_value.pair
-        if pair is not None:
-            pairs.append(pair)
-            increment_stat(stats, "scored_relation_pair_count")
-    result = sorted(
-        pairs,
-        key=lambda item: (
-            -item.scores.relatedness,
-            -item.scores.refactorability,
-            item.left.file,
-            item.right.file,
-        ),
-    )[: PAIR_POLICY.relation_pair_limit]
-    increment_stat(stats, "relation_pair_count", len(result))
-    if caches.relation_pair_enabled and relation_pair_payloads:
-        caches.cache(_RELATION_PAIR_CACHE).set_many(relation_pair_payloads)
-    return result
 
-
-def cached_tree_comparison_provider(
-    caches: AnalysisCacheContext,
-    stats: dict[str, int],
-) -> Callable[[MemberFeatures, MemberFeatures], TreeComparison]:
-    def compare(left: MemberFeatures, right: MemberFeatures) -> TreeComparison:
-        if not caches.relation_pair_enabled:
+    def compare_trees(
+        self, left: MemberFeatures, right: MemberFeatures, stats: dict[str, int] | None
+    ) -> TreeComparison:
+        if not self.caches.relation_pair_enabled:
             return tree_comparison_features(left, right)
         cache_key = tree_comparison_cache_key(left, right)
-        tree = caches.cache(_TREE_COMPARISON_CACHE).get(cache_key)
+        tree = self.caches.cache(_TREE_COMPARISON_CACHE).get(cache_key)
         if tree is not None:
             increment_stat(stats, "tree_comparison_cache_hit_count")
             return tree
         increment_stat(stats, "tree_comparison_cache_miss_count")
         tree = tree_comparison_features(left, right)
-        caches.cache(_TREE_COMPARISON_CACHE).set(cache_key, tree)
+        self.caches.cache(_TREE_COMPARISON_CACHE).set(cache_key, tree)
         return tree
 
-    return compare
+
+def relation_pair_store(caches: AnalysisCacheContext | None) -> RelationPairStore | None:
+    return RelationPairStore(caches) if caches is not None else None
 
 
 def relation_pair_from_cache_value(cached: object) -> tuple[bool, RelationPair | None]:

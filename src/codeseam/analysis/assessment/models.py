@@ -6,21 +6,15 @@ from codeseam.analysis.assessment.definitions import (
     AssessmentBand,
     AssessmentGate,
     EvidenceQuality,
+    RecommendationStatus,
+)
+from codeseam.analysis.findings.definitions import (
     EvidenceStrength,
     FindingActionStatus,
     FindingReviewVisibility,
-    RecommendationStatus,
     ReviewTier,
 )
 from codeseam.analysis.relations.models import ActionKind
-
-
-@dataclass(frozen=True, slots=True)
-class AbstractionRisk:
-    """How risky it is to perform an abstraction"""
-
-    kind: str
-    message: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +110,6 @@ class ReviewAssessment:
 
 __all__ = [
     "AbstractionFit",
-    "AbstractionRisk",
     "ActionAssessment",
     "AssessmentBreakdown",
     "DetectionConfidence",

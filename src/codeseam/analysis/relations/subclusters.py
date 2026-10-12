@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from codeseam.analysis.assessment.cluster import StructuralSubcluster, SubclusterScores
 from codeseam.analysis.relations.clones import clone_metadata, default_action
+from codeseam.analysis.relations.enrichment_models import StructuralSubcluster, SubclusterScores
 from codeseam.analysis.relations.models import MemberRef, RelationKind, RelationPair
 from codeseam.analysis.relations.scoring import refactorability_kind
 

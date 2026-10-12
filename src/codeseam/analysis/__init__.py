@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # ruff: noqa: F401, I001
-from codeseam.analysis.assessment.definitions import (
+from codeseam.analysis.findings.definitions import (
     REVIEW_TIERS,
     FindingActionStatus,
     FindingReviewVisibility,
@@ -17,7 +17,17 @@ from codeseam.analysis.repository import (
     repository_facts_from_cache_value,
 )
 from codeseam.analysis.repository.classification import classify_path
-from codeseam.analysis.repository.languages import detect_language, is_analysis_language
+from codeseam.analysis.completeness import (
+    CompletenessInputs,
+    CompletenessSummary,
+    Coverage,
+    completeness_summary,
+)
+from codeseam.analysis.repository.languages import (
+    OTHER_SOURCE_LANGUAGES,
+    detect_language,
+    is_analysis_language,
+)
 from codeseam.analysis.signatures import (
     DEFAULT_EXPRESSION,
     AssignKind,
@@ -146,7 +156,6 @@ from codeseam.analysis.relations.callables import (
     is_cache_name,
     is_callable_return,
 )
-from codeseam.analysis.relations.enrichment import RelationPairBuilder
 from codeseam.analysis.relations.features import member_features
 from codeseam.analysis.relations.normalization import (
     argument_normalization_relation_features,
@@ -155,6 +164,9 @@ from codeseam.analysis.relations.normalization import (
 )
 from codeseam.analysis.relations.pairs import (
     ActionBuilder,
+    CachedPair,
+    FeaturePair,
+    PairCache,
     feature_member_ref,
     relation_pair_from_features,
 )
@@ -164,7 +176,6 @@ from codeseam.analysis.relations.shingles import structural_shingles
 from codeseam.analysis.relations.similarity import tree_comparison_features
 from codeseam.analysis.assessment import (
     AbstractionFit,
-    AbstractionRisk,
     ActionAssessment,
     AssessmentBand,
     AssessmentBreakdown,
@@ -173,18 +184,19 @@ from codeseam.analysis.assessment import (
     DetectionConfidence,
     DetectionPolicy,
     EvidenceQuality,
-    EvidenceStrength,
     EvidenceSummary,
-    ExtractionConfidence,
     MaintenancePayoff,
     RecommendationCap,
     RecommendationStatus,
     SemanticRisk,
     build_findings,
 )
+from codeseam.analysis.relations.models import AbstractionRisk
+from codeseam.analysis.findings.definitions import EvidenceStrength
+from codeseam.analysis.signatures import ExtractionConfidence
 from codeseam.analysis.assessment.action import action_status_for, recommend_action
 from codeseam.analysis.assessment.assess import assess_target
-from codeseam.analysis.assessment.cluster import (
+from codeseam.analysis.clusters import (
     CandidateGenerationSummary,
     Cluster,
     ClusterEnrichment,
@@ -195,8 +207,8 @@ from codeseam.analysis.assessment.cluster import (
     PolicyConstantMatch,
     StructuralSubcluster,
 )
-from codeseam.analysis.assessment.cluster.build import build_clusters
-from codeseam.analysis.assessment.cluster.policy_constants import build_policy_constant_clusters
+from codeseam.analysis.clusters.build import build_clusters
+from codeseam.analysis.clusters.policy_constants import build_policy_constant_clusters
 from codeseam.analysis.assessment.detection import score_detection_confidence
 from codeseam.analysis.assessment.evidence import (
     EVIDENCE_ANTI_UNIFICATION_TEMPLATE,
@@ -223,16 +235,17 @@ from codeseam.analysis.findings import (
     FindingTargetType,
     SemanticEvidenceMetrics,
 )
-from codeseam.analysis.findings.drafts import (
-    _structural_metrics,
-    _sync_async_member_pair,
-)
 from codeseam.analysis.findings.identity import primary_action
 from codeseam.analysis.findings.review import review_tier_counts
 from codeseam.analysis.findings.semantic_evidence import SemanticEvidenceIndex
 from codeseam.analysis.findings.surfacing import SurfacedFindings, surface_findings
 
 __all__ = [
+    "OTHER_SOURCE_LANGUAGES",
+    "CompletenessInputs",
+    "CompletenessSummary",
+    "Coverage",
+    "completeness_summary",
     "DEFAULT_EXPRESSION",
     "AssignKind",
     "ControlKind",
@@ -253,6 +266,9 @@ __all__ = [
     "AbstractionRisk",
     "ActionAssessment",
     "ActionBuilder",
+    "CachedPair",
+    "FeaturePair",
+    "PairCache",
     "ActionKind",
     "ActionStatus",
     "AdapterId",
@@ -338,7 +354,6 @@ __all__ = [
     "RelationMember",
     "RelationMemberContext",
     "RelationPair",
-    "RelationPairBuilder",
     "RelationScores",
     "RepositoryFacts",
     "RepositoryManifest",
@@ -368,8 +383,6 @@ __all__ = [
     "TREE_EDIT_POLICY",
     "TreeComparison",
     "call_kwarg_shape_values",
-    "_structural_metrics",
-    "_sync_async_member_pair",
     "abstraction_estimate",
     "action_status_for",
     "adapter_id",

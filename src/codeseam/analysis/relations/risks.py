@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 
-from codeseam.analysis.assessment import AbstractionRisk
 from codeseam.analysis.relations.models import (
     CALLSITE_EVIDENCE_KINDS,
     AbstractionKind,
+    AbstractionRisk,
     EvidenceKind,
     RelationMemberContext,
     RiskKind,

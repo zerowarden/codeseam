@@ -7,10 +7,7 @@ from codeseam.analysis.assessment.definitions import (
     AssessmentBand,
     AssessmentGate,
     EvidenceQuality,
-    FindingActionStatus,
-    FindingReviewVisibility,
     RecommendationStatus,
-    ReviewTier,
 )
 from codeseam.analysis.assessment.models import (
     AbstractionFit,
@@ -20,6 +17,11 @@ from codeseam.analysis.assessment.models import (
     SemanticRisk,
 )
 from codeseam.analysis.assessment.policy import AssessmentPolicy
+from codeseam.analysis.findings.definitions import (
+    FindingActionStatus,
+    FindingReviewVisibility,
+    ReviewTier,
+)
 from codeseam.analysis.relations.models import ActionKind
 from codeseam.analysis.relations.policy import RELATION_ASSESSMENT_POLICY
 

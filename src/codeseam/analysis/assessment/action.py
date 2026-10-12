@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from codeseam.analysis.assessment.definitions import (
-    AssessmentGate,
-    FindingActionStatus,
-    RecommendationStatus,
-)
+from codeseam.analysis.assessment.definitions import AssessmentGate, RecommendationStatus
 from codeseam.analysis.assessment.evidence import (
     EVIDENCE_ANTI_UNIFICATION_TEMPLATE,
     EVIDENCE_ARGUMENT_NORMALIZATION_WRAPPER,
@@ -25,6 +21,7 @@ from codeseam.analysis.assessment.relation_evidence import (
     relation_count,
 )
 from codeseam.analysis.findings import FindingMetrics
+from codeseam.analysis.findings.definitions import FindingActionStatus
 from codeseam.analysis.relations.models import (
     ActionKind,
     RefactorAction,

@@ -48,8 +48,11 @@ flowchart LR
 | `make bench` | Scores the labelled corpus. Refer to [Evaluation](evaluation.md). |
 | `make analyze` | Analyses a repository. Use `ANALYZE_ARGS="--repo-root /path"`. |
 | `make profile` | Profiles an analysis run. Use `PROFILE_ARGS`. |
+| `make clean` | Removes caches and build output outside `.cache/`. |
 
 Run `make test`, `make lint`, `make typecheck` and `make deadcode` before each pull request. All four must pass.
+
+All tool caches go into `.cache/`: ruff, mypy, pytest and coverage are set in `pyproject.toml`, and the make targets send Python bytecode to `.cache/pycache`. A tool that you run without `make` can write `__pycache__` folders into `src/` and `tests/`. To prevent this, set `export PYTHONPYCACHEPREFIX=.cache/pycache` in your shell. To remove stray caches and build output, run `make clean`.
 
 ## Code conventions
 
@@ -86,7 +89,3 @@ If you change the format of a cached value without a code change (for example, a
 The documents in `docs/` use ASD-STE100 Simplified Technical English. Refer to [the writing rules](README.md#writing-rules-for-these-documents).
 
 When you change behaviour that a document describes, change the document in the same pull request.
-
-## Review findings
-
-`REVIEW.md` records a full review of the code and every fix since. When you fix a recorded item, move it to the **Completed fixes** section with what changed and how you checked it.

@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import replace
 
 from codeseam.analysis.assessment.assess import assess_target
-from codeseam.analysis.assessment.cluster import Clusters
-from codeseam.analysis.assessment.definitions import REVIEW_TIER_ORDER
 from codeseam.analysis.assessment.policy import AssessmentPolicy
+from codeseam.analysis.clusters import Clusters
 from codeseam.analysis.findings import (
     Finding,
     FindingLocation,
 )
-from codeseam.analysis.findings.drafts import (
+from codeseam.analysis.findings.block_drafts import (
     build_intra_function_duplicate_drafts,
-    build_policy_constant_drafts,
     build_shared_block_drafts,
-    build_signature_drafts,
 )
+from codeseam.analysis.findings.definitions import REVIEW_TIER_ORDER, ReviewTier
+from codeseam.analysis.findings.drafts import build_signature_drafts
 from codeseam.analysis.findings.identity import with_target_identity
+from codeseam.analysis.findings.policy_drafts import build_policy_constant_drafts
 from codeseam.analysis.findings.semantic_evidence import SemanticEvidenceIndex
 from codeseam.analysis.repository import RepositoryFacts
 from codeseam.analysis.signatures import SignatureAnalysis
@@ -29,7 +30,7 @@ def build_findings(
     facts: RepositoryFacts,
     assessment_policy: AssessmentPolicy,
     semantic_enrichment: SemanticEnrichmentRun | None = None,
-    signatures: list[SignatureAnalysis] | None = None,
+    signatures: Sequence[SignatureAnalysis] | None = None,
 ) -> list[Finding]:
     semantic_evidence = SemanticEvidenceIndex.from_run(semantic_enrichment)
     drafts = [
@@ -51,7 +52,9 @@ def build_findings(
             for draft in drafts
         ]
     )
-    ordered = sorted(_dedupe_equivalent_findings(findings), key=finding_sort_key)
+    ordered = sorted(
+        _drop_subsumed_findings(_dedupe_equivalent_findings(findings)), key=finding_sort_key
+    )
     return [
         replace(finding, rank=index, rank_label=f"#{index}")
         for index, finding in enumerate(ordered, 1)
@@ -103,6 +106,37 @@ def _dedupe_equivalent_findings(findings: list[Finding]) -> list[Finding]:
         if current is None or finding_sort_key(finding) < finding_sort_key(current):
             selected[key] = finding
     return list(selected.values())
+
+
+ACTIONABLE_TIERS = frozenset({ReviewTier.RECOMMENDED_EDIT, ReviewTier.REVIEW_CANDIDATE})
+
+
+def _drop_subsumed_findings(findings: list[Finding]) -> list[Finding]:
+    """Drop a finding when an actionable one already covers all of its members.
+
+    A cluster of 21 identical helpers and a 12-member subset of it with the
+    same action tell the reader one thing. Only a recommended edit or review
+    candidate subsumes: a broad maintenance-note family must not hide a
+    precise, smaller cluster. A subset with a different action or a higher
+    tier is kept.
+    """
+
+    surfaces = [
+        (finding, frozenset(_location_identity(location) for location in finding.locations))
+        for finding in findings
+    ]
+    return [
+        finding
+        for finding, members in surfaces
+        if not any(
+            members < other_members
+            and other.primary_action is finding.primary_action
+            and other.target_type is finding.target_type
+            and other.review_tier in ACTIONABLE_TIERS
+            and REVIEW_TIER_ORDER[other.review_tier] <= REVIEW_TIER_ORDER[finding.review_tier]
+            for other, other_members in surfaces
+        )
+    ]
 
 
 def _finding_equivalence_key(finding: Finding) -> tuple[object, ...]:

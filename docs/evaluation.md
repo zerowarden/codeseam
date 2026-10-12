@@ -93,6 +93,9 @@ This command writes a new `baseline.json`. Commit it with the change.
 
 ## Add a case
 
+To add many cases fast, follow the [Corpus growth plan](corpus-growth.md). To add one case by hand, do these steps:
+
+
 1. Write the source files in `tests/fixtures/benchmark/py/` or `tests/fixtures/benchmark/ts/`.
 2. Write the case in `labels.toml` before you run the tool. Decide `expect` from the code, not from the result.
 3. Run `make bench`.

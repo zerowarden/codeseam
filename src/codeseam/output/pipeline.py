@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from codeseam.adapters.languages import AdapterCapabilitySummary
 from codeseam.analysis import (
     Clusters,
+    CompletenessSummary,
     Finding,
     RepositoryFacts,
     SignatureAnalysis,
@@ -62,6 +63,7 @@ class ReportInputs:
     manifest: Json
     adapter_capabilities: tuple[AdapterCapabilitySummary, ...] = ()
     semantic_enrichment: SemanticEnrichmentRun | None = None
+    completeness: CompletenessSummary | None = None
     debug: bool = False
 
 
@@ -109,7 +111,7 @@ def build_report_artifacts(inputs: ReportInputs) -> ReportArtifacts:
         adapter_capabilities=adapter_capabilities_payload(inputs.adapter_capabilities),
         include_debug_bundle=inputs.debug,
     )
-    metrics = build_metrics(report, surfaced)
+    metrics = build_metrics(report, surfaced, inputs.completeness)
     summary_targets = [payload for payload in detail if payload.get("summary_eligible") is True]
     return ReportArtifacts(
         analysis_targets=agent(surfaced.analysis),

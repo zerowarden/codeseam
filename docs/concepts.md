@@ -80,6 +80,7 @@ flowchart TD
 
 - **Review tier**: The decision for a finding. Refer to the table below.
 - **Semantic role**: A label for a function that changes how Codeseam assesses it. Examples are `test_code`, `constructor`, `typing_overload` and `adapter_forwarder`. A role can limit the tier of a finding (a **semantic cap**).
+- **Coverage**: How much of the repository a run analysed: `complete`, `partial` or `insufficient`. Refer to [Reports](reports.md#completeness).
 - **Summary eligible**: A finding that appears in `agent/summary.md` and that CI counts. All recommended edits are summary eligible. Other findings must have a real payoff, a medium or higher refactorability, and an edit action.
 
 ## Review tiers

@@ -39,10 +39,6 @@ codeseam = "codeseam.cli.main:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/codeseam"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/codeseam/output/reports/templates" = "codeseam/output/reports/templates"
-"src/codeseam/resources/semantic_worker" = "codeseam/resources/semantic_worker"
-
 [dependency-groups]
 dev = [
   "basedpyright>=1.24.0",

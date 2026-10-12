@@ -16,6 +16,7 @@ This folder contains the documentation for users and for contributors. Each docu
 | [Architecture](architecture.md) | Find your way in the source code and its layers. |
 | [Languages](languages.md) | Learn how Python and TypeScript/JavaScript are parsed, or add a language. |
 | [Evaluation](evaluation.md) | Measure a change with the labelled corpus and the benchmark. |
+| [Corpus growth plan](corpus-growth.md) | Grow the labelled corpus with little data and little time. |
 | [Contributing](contributing.md) | Set up a development environment and make a change. |
 
 ## Reading paths
@@ -31,6 +32,7 @@ flowchart LR
     contrib --> arch["Architecture"]
     arch --> method["Methodology"]
     method --> eval["Evaluation"]
+    eval --> corpus["Corpus growth plan"]
     arch --> langs["Languages"]
 ```
 

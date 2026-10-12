@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 
 from codeseam.analysis.assessment.definitions import AssessmentBand
-from codeseam.analysis.assessment.models import AbstractionRisk, SemanticRisk
+from codeseam.analysis.assessment.models import SemanticRisk
 from codeseam.analysis.assessment.policy import AssessmentPolicy
 from codeseam.analysis.findings import FindingMetrics
+from codeseam.analysis.relations.models import AbstractionRisk
 
 
 def score_semantic_risk(

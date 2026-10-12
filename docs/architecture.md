@@ -29,8 +29,10 @@ The `analysis/` package has these subpackages:
 | `analysis/inventory/` | The function inventory and the shared function model (`FunctionIR`). |
 | `analysis/signatures/` | Signature records, shapes, the shared vocabulary, and policy constant models. |
 | `analysis/relations/` | Candidate generation, pair comparison, scores, deltas and shared blocks. |
-| `analysis/findings/` | Finding drafts, finding models, identity and the typed surface split. |
-| `analysis/assessment/` | Clusters, the five-part assessment, semantic caps and review tiers. |
+| `analysis/clusters/` | Cluster models, cluster building, and policy-constant clusters. |
+| `analysis/findings/` | Finding drafts (`drafts.py`, `promotion.py`, `block_drafts.py`, `policy_drafts.py`), draft metrics, finding models, identity and the typed surface split. |
+| `analysis/assessment/` | The five-part assessment, semantic caps and review tiers. |
+| `analysis/completeness.py` | The completeness summary of a run. |
 
 ## Layers
 
@@ -56,6 +58,18 @@ flowchart TD
     semantics --> platform["platform"]
     analysis --> platform
 ```
+
+Inside `analysis/`, the subpackages also have an order. Each one imports only from the ones before it:
+
+```mermaid
+flowchart LR
+    signatures["signatures,<br/>repository,<br/>semantic_roles"] --> relations["relations,<br/>inventory"]
+    relations --> clusters["clusters"]
+    clusters --> findings["findings"]
+    findings --> assessment["assessment"]
+```
+
+`tests/test_layers.py` checks both orders. An import in the wrong direction makes the test fail.
 
 Keep these rules when you add code:
 
@@ -105,11 +119,13 @@ The pipeline writes into a staging directory. It replaces the previous reports o
 | `FileRecord` | `analysis/repository/` | One file: path, language, role, size and content hash. |
 | `FunctionRecord` | `analysis/inventory/` | One function: location, counts and source. |
 | `SignatureRecord`, `SignatureAnalysis` | `analysis/signatures/` | The features of one function. `SignatureAnalysis` splits them into a core, relation detail and output detail. |
-| `Cluster` | `analysis/assessment/cluster/` | A group of functions and its relation pairs. |
+| `Cluster` | `analysis/clusters/` | A group of functions and its relation pairs. |
 | `RelationPair` | `analysis/relations/` | Two compared functions, with scores, deltas and a relation kind. |
 | `FindingDraft` | `analysis/findings/` | The evidence and metrics of one possible finding. |
 | `Finding` | `analysis/findings/` | One assessed finding, with its tier, action and target ID. |
 | `SurfacedFindings` | `analysis/findings/surfacing.py` | The ranked findings, split into analysis, observations and summary. |
+| `CompletenessSummary` | `analysis/completeness.py` | How much of the repository a run covered. |
+| `DoctorReport` | `pipeline/doctor.py` | The checks of `codeseam doctor`. |
 
 ## Cache
 
@@ -128,6 +144,8 @@ The cache is one SQLite database in `cache.path`. It has one namespace for each 
 
 Every cache version includes a fingerprint. The fingerprint is a hash of the Codeseam source code (including the semantic worker), the Python version and the parser package versions. When any of these change, Codeseam ignores the old cache entries.
 
+Pair comparison has one algorithm, `relation_pairs` in `analysis/relations/pairs.py`. It takes an optional `PairCache`. The cache layer gives it a `RelationPairStore`, which reads and writes stored results and tree comparisons. The result is the same with and without the cache.
+
 **NOTE:** A cache entry is stored only for a file that was read without problems. A file that changed during the run, or that did not parse, is analysed again in the next run.
 
 ## Where to make a change
@@ -143,3 +161,5 @@ Every cache version includes a fingerprint. The fingerprint is a hash of the Cod
 | Add or change a semantic cap | `analysis/assessment/semantic_caps.py` |
 | Change a report field | `output/serializers/findings.py` |
 | Add a command | `cli/spec.py` and `cli/commands/` |
+| Add a check to `codeseam doctor` | `pipeline/doctor.py` |
+| Change how completeness is decided | `analysis/completeness.py` |

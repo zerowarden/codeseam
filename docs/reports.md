@@ -24,7 +24,7 @@ Codeseam writes a new run into a staging directory first. It replaces the old re
 
 Read the files in this sequence:
 
-1. Read `agent/summary.md`. It lists the findings that are worth your attention, with the suggested action for each.
+1. Read `agent/summary.md`. First read its **Analysis Completeness** section. Then read the findings that are worth your attention, with the suggested action for each.
 2. For one finding, run `codeseam explain <target id>`. Add `--source` to show the code.
 3. For automation, read `agent/analysis.jsonl`. Each line is one JSON object.
 4. Read `agent/observations.jsonl` only if you want the weak signals too.
@@ -82,9 +82,40 @@ Each line of `analysis.jsonl` and `observations.jsonl` has these fields:
 | `agent_visible_target_count` | The number of summary-eligible findings. |
 | `recommended_edit_tier_count` | The number of findings with the tier `recommended_edit`. This number sets the exit code. |
 | `recommended_edit_count` | The number of summary-eligible findings with the action status `recommended_edit`. |
+| `completeness` | How much of the repository the run covered. Refer to [Completeness](#completeness). |
 | `summary.targets_by_review_tier` | The number of findings for each tier. |
 | `summary.targets_by_action_status` | The number of findings for each action status. |
 | `summary.files_with_targets` | The files that have one or more findings. |
+
+## Completeness
+
+A report without findings means "no repetition worth attention" only when the analysis covered the repository. The `completeness` object in `agent/metrics.json` tells how much the run covered. The summary and the command output show it too.
+
+| Field | Meaning |
+|---|---|
+| `coverage` | `complete`, `partial` or `insufficient`. |
+| `reasons` | Why the coverage is not `complete`. |
+| `notes` | Limits that bound the work but leave no code unanalysed, for example candidate pairs that were not compared because they ranked lowest. |
+| `files` | The number of selected source files that were `analysed`, `partial` (parsed with syntax errors), `failed` (nothing extracted) or `changed` (edited during the run). |
+| `unsupported_source_files` | Source files in languages without an adapter, for example Go or Java. |
+| `function_count` | The number of functions that Codeseam extracted. |
+| `comparisons` | The pairs compared, the pairs and bucket members that a limit cut off, and the related pairs whose tree similarity was measured or estimated. |
+| `evidence_methods` | Each evidence method, and if it `ran`, was `skipped` (nothing to run on) or was `unavailable` (wanted, but could not run). |
+
+```mermaid
+flowchart TD
+    run["Analysis run"] --> q1{"No source files, no functions,<br/>half or more files failed,<br/>or more unsupported files<br/>than supported files?"}
+    q1 -- yes --> insufficient["insufficient"]
+    q1 -- no --> q2{"Any failed, partial or changed file,<br/>unsupported files,<br/>or a requested semantic provider<br/>that did not run?"}
+    q2 -- yes --> partial["partial"]
+    q2 -- no --> complete["complete"]
+```
+
+**CAUTION:** When the coverage is `partial` or `insufficient`, an empty report does not mean that the code has no repetition. Read the reasons, fix them if you can, and run the analysis again.
+
+Comparison limits do not make a run `partial`. Codeseam compares the candidate pairs with the highest estimated similarity first, so the pairs that a limit cuts are the least likely clones. The `notes` field reports them.
+
+The counts come from the scan and the final results, not from the cache. Thus a warm run reports the same completeness as a cold run.
 
 ## The explain command
 
@@ -100,7 +131,7 @@ Each line of `analysis.jsonl` and `observations.jsonl` has these fields:
 
 ## Command output and CI
 
-By default, `codeseam analyze` prints a short text summary.
+By default, `codeseam analyze` prints a short text summary. Its `Coverage:` line shows the completeness of the run.
 
 - `--format json` prints one JSON object. `--format ndjson` prints one JSON object per line.
 - `--output <path>` writes that output to a file.

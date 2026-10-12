@@ -3,14 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from codeseam.analysis.assessment.cluster import (
-    Cluster,
-    PolicyConstantCluster,
-    StructuralSubcluster,
-)
-from codeseam.analysis.assessment.definitions import (
+from codeseam.analysis.clusters import Cluster, PolicyConstantCluster, StructuralSubcluster
+from codeseam.analysis.findings.definitions import (
     EvidenceStrength,
-    ExtractionConfidence,
     FindingActionStatus,
     FindingReviewVisibility,
     FindingTargetType,
@@ -22,7 +17,7 @@ from codeseam.analysis.relations.models import (
     RefactorActionSummary,
     RelationPair,
 )
-from codeseam.analysis.signatures import NormalizationLevel
+from codeseam.analysis.signatures import ExtractionConfidence, NormalizationLevel
 
 
 @dataclass(frozen=True)

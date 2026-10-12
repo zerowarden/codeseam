@@ -32,6 +32,7 @@ def agent_summary_model(
             _agent_target(index, target) for index, target in enumerate(agent_targets, 1)
         ],
         "guardrails": _agent_guardrails(),
+        "completeness": as_json_object(metrics.get("completeness")),
     }
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codeseam.analysis.assessment.cluster import Cluster
+from codeseam.analysis.clusters import Cluster
 from codeseam.analysis.findings.models import FindingLocation
 
 

@@ -8,6 +8,7 @@ from codeseam.analysis.signatures.duplicate_blocks import (
 )
 from codeseam.analysis.signatures.metadata import (
     AdapterId,
+    ExtractionConfidence,
     LanguageFamily,
     adapter_id,
     language_family,
@@ -64,6 +65,7 @@ from codeseam.analysis.signatures.vocabulary import (
 )
 
 __all__ = [
+    "ExtractionConfidence",
     "DEFAULT_EXPRESSION",
     "AssignKind",
     "ControlKind",

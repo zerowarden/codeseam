@@ -2,14 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
-from typing import Protocol
 
-from codeseam.analysis.assessment.cluster import (
-    CandidateGenerationSummary,
-    ClusterEnrichment,
-    ClusterSummary,
-    LineRange,
-)
 from codeseam.analysis.relations.actions import pair_actions, refactor_action_candidates
 from codeseam.analysis.relations.callables import (
     callable_members,
@@ -21,15 +14,20 @@ from codeseam.analysis.relations.candidates import (
     relation_candidate_members,
     relation_candidate_pairs,
 )
+from codeseam.analysis.relations.enrichment_models import (
+    CandidateGenerationSummary,
+    ClusterEnrichment,
+    ClusterSummary,
+    LineRange,
+)
 from codeseam.analysis.relations.models import (
     EvidenceKind,
     MemberFeatureCache,
     MemberInput,
     RelationMemberContext,
-    RelationPair,
 )
 from codeseam.analysis.relations.pairs import (
-    ActionBuilder,
+    PairCache,
     relation_pairs,
     structural_duplicate_pairs,
 )
@@ -51,17 +49,6 @@ CANDIDATE_GENERATION_METHODS = (
 )
 
 
-class RelationPairBuilder(Protocol):
-    def __call__(
-        self,
-        candidate_pairs: Sequence[tuple[MemberInput, MemberInput]],
-        *,
-        action_builder: ActionBuilder,
-        feature_cache: MemberFeatureCache,
-        stats: dict[str, int],
-    ) -> list[RelationPair]: ...
-
-
 type RelationFeatureHydrator = Callable[[Sequence[SignatureAnalysis]], list[SignatureAnalysis]]
 
 
@@ -71,7 +58,7 @@ def enrich_signature_cluster(  # noqa: PLR0913
     base_evidence_kind: EvidenceKind = EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
     candidate_scope: str = "within_signature_shape_bucket",
     extra_candidate_methods: list[str] | None = None,
-    relation_pair_builder: RelationPairBuilder | None = None,
+    pair_cache: PairCache | None = None,
     feature_hydrator: RelationFeatureHydrator | None = None,
     candidate_pairs: Sequence[tuple[MemberInput, MemberInput]] | None = None,
 ) -> ClusterEnrichment:
@@ -102,20 +89,12 @@ def enrich_signature_cluster(  # noqa: PLR0913
     candidate_pairs = _hydrate_candidate_pairs(pairs, feature_hydrator)
     feature_cache = MemberFeatureCache(tuple(member for pair in candidate_pairs for member in pair))
     relation_started = time.perf_counter()
-    relation_items = (
-        relation_pair_builder(
-            candidate_pairs,
-            action_builder=pair_actions,
-            feature_cache=feature_cache,
-            stats=comparison_stats,
-        )
-        if relation_pair_builder
-        else relation_pairs(
-            candidate_pairs,
-            action_builder=pair_actions,
-            feature_cache=feature_cache,
-            stats=comparison_stats,
-        )
+    relation_items = relation_pairs(
+        candidate_pairs,
+        action_builder=pair_actions,
+        feature_cache=feature_cache,
+        stats=comparison_stats,
+        cache=pair_cache,
     )
     relation_ms = _elapsed_ms(relation_started)
     structural_pairs = structural_duplicate_pairs(relation_items)

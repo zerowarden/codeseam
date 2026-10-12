@@ -69,6 +69,7 @@ from codeseam.analysis import (
     is_callable_return,
     signature_shape,
 )
+from codeseam.analysis.completeness import NO_FUNCTIONS_RECOVERED, TREE_SITTER_PARSE_ERROR
 from codeseam.caveat_msg import PARSE_ERROR_CAVEAT
 from codeseam.platform import normalize_identifier
 
@@ -251,11 +252,11 @@ def _parse_diagnostics(
     functions: list[FunctionIR],
 ) -> tuple[str, ...]:
     if recovered := sum(PARSE_ERROR_CAVEAT in function.caveats for function in functions):
-        return (f"tree_sitter_parse_error: {recovered} function(s) recovered from syntax errors",)
+        return (f"{TREE_SITTER_PARSE_ERROR}: {recovered} function(s) recovered from syntax errors",)
     # A badly broken file can yield no functions at all; re-checking the tree is cheap.
     runtime = _runtime_for(context.path, context.language)
     if not functions and runtime.parse(source).root_node.has_error:
-        return ("tree_sitter_parse_error: no functions recovered",)
+        return (f"{TREE_SITTER_PARSE_ERROR}: {NO_FUNCTIONS_RECOVERED}",)
     return ()
 
 

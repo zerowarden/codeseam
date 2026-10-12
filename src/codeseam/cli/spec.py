@@ -124,6 +124,18 @@ def command_specs() -> dict[str, CommandSpec]:
                 {"names": ("--sort",), "default": "cumtime", "help": "pstats sort key."},
             ),
         },
+        "doctor": {
+            "description": (
+                "Check the runtime, configuration, storage, parsers, file selection, cache "
+                "and semantic provider. Runs no analysis and no repository code."
+            ),
+            "help": "Check that an analysis can run.",
+            "handler": "doctor",
+            "arguments": (
+                {"names": ("path",), "nargs": "?", "help": "Repository path to check."},
+                {"names": ("--json",), "action": "store_true", "help": "Print JSON."},
+            ),
+        },
         "explain": {
             "description": "Show a compact target summary with optional detail.",
             "help": "Explain one review target.",

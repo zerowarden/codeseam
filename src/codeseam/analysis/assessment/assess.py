@@ -11,15 +11,10 @@ from codeseam.analysis.assessment.classify import (
     review_attention_score,
     summary_eligible,
 )
-from codeseam.analysis.assessment.definitions import EvidenceStrength, FindingReviewVisibility
 from codeseam.analysis.assessment.detection import score_detection_confidence
 from codeseam.analysis.assessment.evidence import evidence_summary
 from codeseam.analysis.assessment.fit import score_abstraction_fit
-from codeseam.analysis.assessment.models import (
-    AbstractionRisk,
-    AssessmentBreakdown,
-    ReviewAssessment,
-)
+from codeseam.analysis.assessment.models import AssessmentBreakdown, ReviewAssessment
 from codeseam.analysis.assessment.payoff import score_maintenance_payoff
 from codeseam.analysis.assessment.policy import AssessmentPolicy
 from codeseam.analysis.assessment.risk import (
@@ -33,7 +28,9 @@ from codeseam.analysis.findings import (
     FindingDraft,
 )
 from codeseam.analysis.findings.common import roles_for
+from codeseam.analysis.findings.definitions import EvidenceStrength, FindingReviewVisibility
 from codeseam.analysis.relations.models import (
+    AbstractionRisk,
     ActionKind,
     RefactorAction,
 )

@@ -33,6 +33,7 @@ from codeseam.analysis import (
     signature_analysis_from_core,
     similarity,
 )
+from codeseam.analysis.relations.pairs import relation_pairs
 from codeseam.cache import AnalysisCacheContext, LanguageRunCache, persistent_cache
 from codeseam.cache import relation_cache as relation_pair_cache
 
@@ -173,10 +174,10 @@ def test_tree_comparison_cache_reuses_lower_level_fact(
         right = _member("fn_right")
         feature_cache = MemberFeatureCache([left, right])
         stats: dict[str, int] = {}
-        provider = relation_pair_cache.cached_tree_comparison_provider(caches, stats)
+        store = relation_pair_cache.RelationPairStore(caches)
 
-        first = provider(feature_cache.get(left), feature_cache.get(right))
-        second = provider(feature_cache.get(left), feature_cache.get(right))
+        first = store.compare_trees(feature_cache.get(left), feature_cache.get(right), stats)
+        second = store.compare_trees(feature_cache.get(left), feature_cache.get(right), stats)
 
         assert calls == 1
         assert first == second
@@ -235,12 +236,12 @@ def test_relation_pair_cache_hit_returns_the_complete_cold_result(tmp_path: Path
             language=LanguageRunCache(),
         )
         runs = [
-            relation_pair_cache.cached_relation_pairs(
+            relation_pairs(
                 [(left, right)],
                 action_builder=pair_actions,
                 feature_cache=MemberFeatureCache([left, right]),
                 stats={},
-                caches=caches,
+                cache=relation_pair_cache.RelationPairStore(caches),
             )
             for _ in range(2)
         ]
@@ -447,12 +448,12 @@ def test_tree_proxies_are_not_cached_as_comparisons(tmp_path: Path) -> None:
             language=LanguageRunCache(),
         )
         stats: dict[str, int] = {}
-        relation_pair_cache.cached_relation_pairs(
+        relation_pairs(
             [(left, right)],
             action_builder=pair_actions,
             feature_cache=MemberFeatureCache([left, right]),
             stats=stats,
-            caches=caches,
+            cache=relation_pair_cache.RelationPairStore(caches),
         )
     finally:
         cache.close()
@@ -582,3 +583,33 @@ def _patch_tree_distance(
 
 def _fail_similarity(left: str, right: str) -> float:
     raise AssertionError(f"unexpected Levenshtein fallback for {left!r}, {right!r}")
+
+
+def test_cached_and_uncached_pair_processing_give_the_same_pairs(tmp_path: Path) -> None:
+    members = [
+        _member("fn_a", statements=("ASSIGN:BIND", "IF", "RETURN:ARG0")),
+        _member("fn_b", statements=("ASSIGN:BIND", "IF", "RETURN:ARG0")),
+        _member("fn_c", statements=("ASSIGN:BIND", "RETURN:")),
+    ]
+    candidates = [(members[0], members[1]), (members[0], members[2]), (members[1], members[2])]
+
+    def run(cache: relation_pair_cache.RelationPairStore | None) -> list[RelationPair]:
+        return relation_pairs(
+            candidates,
+            action_builder=pair_actions,
+            feature_cache=MemberFeatureCache(members),
+            cache=cache,
+        )
+
+    persistent = persistent_cache(tmp_path / ".cache", enabled=True)
+    try:
+        caches = AnalysisCacheContext(
+            persistent=persistent,
+            file_analysis_enabled=True,
+            relation_pair_enabled=True,
+        )
+        cold, warm = (run(relation_pair_cache.RelationPairStore(caches)) for _ in range(2))
+    finally:
+        persistent.close()
+
+    assert cold == warm == run(None)

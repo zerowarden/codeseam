@@ -36,8 +36,6 @@ from codeseam.analysis import (
     RepositoryScan,
     ReviewTier,
     SemanticCapAssessment,
-    _structural_metrics,
-    _sync_async_member_pair,
     apply_semantic_cap,
     assess_target,
     build_findings,
@@ -46,10 +44,12 @@ from codeseam.analysis import (
 )
 from codeseam.analysis.assessment.findings import (
     _dedupe_equivalent_findings,
+    _drop_subsumed_findings,
     _with_unique_identities,
 )
-from codeseam.analysis.findings.drafts import promotable_components, should_promote
 from codeseam.analysis.findings.identity import with_target_identity
+from codeseam.analysis.findings.metrics import structural_metrics, sync_async_member_pair
+from codeseam.analysis.findings.promotion import promotable_components, should_promote
 from codeseam.config import load_config
 from codeseam.pipeline.signatures import build_signature_artifacts
 
@@ -957,7 +957,7 @@ def test_tiny_special_method_clones_count_every_member_and_stay_notes(tmp_path: 
     (target,) = build_findings(artifacts.clusters, facts, POLICY)
 
     special = FunctionSemanticRole.PYTHON_SPECIAL_METHOD.value
-    assert target.metrics.semantic_role_counts[special] == target.metrics.member_count
+    assert (target.metrics.semantic_role_counts or {})[special] == target.metrics.member_count
     assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
 
 
@@ -1070,7 +1070,7 @@ def test_structural_duplicate_pairs_contribute_to_relation_metrics() -> None:
         scores=(EXPECTED_RELATEDNESS, EXPECTED_REFACTORABILITY, EXPECTED_CONFIDENCE),
     )
 
-    metrics = _structural_metrics([pair], [], [])
+    metrics = structural_metrics([pair], [], [])
 
     assert metrics["same_role_relation_count"] == 1
     assert metrics["same_directory_relation_count"] == 1
@@ -1085,7 +1085,7 @@ def test_structural_metric_kind_counts_include_duplicate_and_variant_pairs() -> 
     duplicate = _relation_pair_fixture(relation_kind=RelationKind.BODY_IDENTICAL)
     variant = _relation_pair_fixture(relation_kind=RelationKind.COMMON_WRAPPER_DIFFERENT_CORE)
 
-    metrics = _structural_metrics([duplicate], [variant], [])
+    metrics = structural_metrics([duplicate], [variant], [])
 
     assert metrics["relation_kind_counts"] == {
         RelationKind.BODY_IDENTICAL.value: 1,
@@ -1097,7 +1097,7 @@ def test_structural_metric_kind_counts_include_duplicate_and_variant_pairs() -> 
 def test_structural_metrics_count_a_pair_listed_twice_once() -> None:
     pair = _relation_pair_fixture()
 
-    metrics = _structural_metrics([pair], [pair], [])
+    metrics = structural_metrics([pair], [pair], [])
 
     assert metrics["guardrail_relation_pair_count"] == 1
     assert metrics["body_hash_match_count"] == 1
@@ -1109,7 +1109,7 @@ def test_structural_metrics_profile_comes_from_one_lead_pair() -> None:
     lead = _relation_pair_fixture(scores=lead_scores, shape=lead_shape)
     weaker = _relation_pair_fixture(left_symbol="other", scores=weaker_scores, shape=weaker_shape)
 
-    metrics = _structural_metrics([], [weaker, lead], [])
+    metrics = structural_metrics([], [weaker, lead], [])
 
     # Every profile metric comes from the highest-confidence pair, not per-axis maxima.
     assert metrics["lead_confidence_score"] == lead_scores[2]
@@ -1122,7 +1122,7 @@ def test_structural_metrics_profile_comes_from_one_lead_pair() -> None:
 def test_structural_metrics_count_test_duplicate_pair_guardrails() -> None:
     pair = _relation_pair_fixture(roles=(FunctionSemanticRole.TEST_CODE.value,))
 
-    metrics = _structural_metrics([pair], [], [])
+    metrics = structural_metrics([pair], [], [])
 
     assert metrics["test_duplicate_pair_count"] == 1
     assert metrics["test_relation_pair_count"] == 1
@@ -1131,7 +1131,7 @@ def test_structural_metrics_count_test_duplicate_pair_guardrails() -> None:
 def test_structural_metrics_count_declaration_pair_guardrails() -> None:
     pair = _relation_pair_fixture(roles=(FunctionSemanticRole.DECLARATION_BOUNDARY.value,))
 
-    metrics = _structural_metrics([pair], [], [])
+    metrics = structural_metrics([pair], [], [])
 
     assert metrics["declaration_duplicate_pair_count"] == 1
     assert metrics["declaration_relation_pair_count"] == 1
@@ -1249,7 +1249,7 @@ def test_pair_level_sync_async_mirror_uses_normalized_symbols() -> None:
         file="lib/pkg/asyncio/engine.py",
     )
 
-    assert _sync_async_member_pair(left, right) is True
+    assert sync_async_member_pair(left, right) is True
 
 
 def test_mixed_high_risk_clone_uses_safety_stop() -> None:
@@ -1612,3 +1612,40 @@ def _member_count(metrics: dict[str, object]) -> int:
 
 def _target_metrics(values: dict[str, object]) -> FindingMetrics:
     return FindingMetrics(**cast(Any, values))
+
+
+@pytest.mark.parametrize(
+    ("outer_tier", "outer_action", "subset_kept"),
+    [
+        (ReviewTier.RECOMMENDED_EDIT, ActionKind.CONSOLIDATE_CLONE, False),
+        (ReviewTier.MAINTENANCE_NOTE, ActionKind.CONSOLIDATE_CLONE, True),
+        (ReviewTier.RECOMMENDED_EDIT, ActionKind.EXTRACT_SMALL_HELPER, True),
+    ],
+    ids=["covered-by-actionable", "broad-note-does-not-hide", "different-action"],
+)
+def test_findings_covered_by_an_actionable_finding_are_dropped(
+    outer_tier: ReviewTier, outer_action: ActionKind, subset_kept: bool
+) -> None:
+    base = _assess(
+        {"member_count": 2, "structural_duplicate_pair_count": 1, "body_hash_match_count": 1},
+        actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
+    )
+
+    def over(files: int, tier: ReviewTier, action: ActionKind) -> Finding:
+        return replace(
+            base,
+            review_tier=tier,
+            primary_action=action,
+            locations=tuple(
+                FindingLocation(f"src/{index}.py", 1, 5, "signature", "shape", "helper")
+                for index in range(files)
+            ),
+        )
+
+    subset = over(2, ReviewTier.RECOMMENDED_EDIT, ActionKind.CONSOLIDATE_CLONE)
+    outer = over(4, outer_tier, outer_action)
+
+    kept = _drop_subsumed_findings([outer, subset])
+
+    assert (subset in kept) is subset_kept
+    assert outer in kept

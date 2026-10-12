@@ -47,6 +47,7 @@ def analysis_result_payload(
             "agent_summary_path": str(paths.artifact("agent_summary")),
             "analysis_path": str(paths.artifact("agent_analysis")),
         },
+        "completeness": report_artifacts.agent_metrics.get("completeness"),
         "threshold_breached": threshold_breached(report_artifacts),
         "metrics": {
             "recommended_edit_count": report_artifacts.agent_metrics.get(

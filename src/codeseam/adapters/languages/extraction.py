@@ -10,6 +10,7 @@ from codeseam.adapters.languages import (
     LanguageRegistry,
 )
 from codeseam.analysis import FileRecord, FunctionRecord, PolicyConstant, SignatureAnalysis
+from codeseam.analysis.completeness import EXTRACTION_FAILED, SOURCE_CHANGED
 from codeseam.cache import (
     AnalysisCacheContext,
     FileAnalysisCacheRequest,
@@ -140,13 +141,13 @@ def _extract_analysis(
         return adapter.extract_analysis(context)
     except SourceChangedError as exc:
         return LanguageAdapterAnalysis(
-            functions=(), signatures=(), diagnostics=(f"source_changed: {exc}",)
+            functions=(), signatures=(), diagnostics=(f"{SOURCE_CHANGED}: {exc}",)
         )
     except (OSError, RecursionError, UnicodeError, ValueError) as exc:
         return LanguageAdapterAnalysis(
             functions=(),
             signatures=(),
-            diagnostics=(f"extraction_failed: {type(exc).__name__}: {exc}",),
+            diagnostics=(f"{EXTRACTION_FAILED}: {type(exc).__name__}: {exc}",),
         )
 
 

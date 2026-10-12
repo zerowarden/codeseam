@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from typing import TypeVar
 
 from codeseam.analysis import (
+    CompletenessSummary,
     FunctionInventory,
     RepositoryFacts,
     RepositoryScan,
@@ -37,6 +38,7 @@ from codeseam.output import (
     write_report_artifacts,
     write_signature_artifacts,
 )
+from codeseam.pipeline.completeness import run_completeness
 from codeseam.pipeline.file_analysis import RepositoryFileAnalysis, analyze_selected_files
 from codeseam.pipeline.inventory import build_function_inventory
 from codeseam.pipeline.progress import ProgressReporter
@@ -79,6 +81,7 @@ class AnalysisRun:
     timings: Json
     signature_artifacts: SignatureArtifacts
     semantic_enrichment: SemanticEnrichmentRun
+    completeness: CompletenessSummary
     file_diagnostics: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
@@ -163,6 +166,15 @@ class _AnalysisPipeline:
             "Planning semantic enrichment",
             lambda: self._semantic_enrichment(signature_artifacts, repository_enrichment),
         )
+        completeness = run_completeness(
+            facts,
+            diagnostics=inventory_stage.file_analysis.diagnostics,
+            function_count=len(inventory_stage.inventory.records),
+            comparison_stats=_relation_comparison_stats(signature_artifacts),
+            capabilities=repository_enrichment.adapter_capabilities,
+            semantic_enrichment=semantic_enrichment,
+            clusters=signature_artifacts.clusters,
+        )
         report_artifacts = self._stage(
             "Building report artifacts",
             lambda: self._build_reports(
@@ -170,6 +182,7 @@ class _AnalysisPipeline:
                 signature_artifacts,
                 repository_enrichment,
                 semantic_enrichment,
+                completeness,
             ),
         )
         self._stage("Finalising artifacts", self._finalise_artifacts)
@@ -188,6 +201,7 @@ class _AnalysisPipeline:
             },
             signature_artifacts=signature_artifacts,
             semantic_enrichment=semantic_enrichment,
+            completeness=completeness,
             file_diagnostics=inventory_stage.file_analysis.diagnostics,
         )
 
@@ -307,6 +321,7 @@ class _AnalysisPipeline:
         signature_artifacts: SignatureArtifacts,
         repository_enrichment: RepositoryEnrichment,
         semantic_enrichment: SemanticEnrichmentRun,
+        completeness: CompletenessSummary,
     ) -> _StageResult[ReportArtifacts]:
         manifest = build_manifest(self.config, selected_file_count=facts.selected_file_count)
         write_jsonable_atomic(self.paths.artifact("manifest"), manifest, pretty=True)
@@ -320,6 +335,7 @@ class _AnalysisPipeline:
                 manifest=manifest,
                 adapter_capabilities=repository_enrichment.adapter_capabilities,
                 semantic_enrichment=semantic_enrichment,
+                completeness=completeness,
                 debug=self.request.debug,
             )
         )

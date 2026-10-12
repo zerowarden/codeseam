@@ -24,6 +24,8 @@ codeseam.toml: output.root must be a string, not 5
 
 When all sources are merged, Codeseam makes one read-only `Config` object. The `config_hash` in `manifest.json` identifies the merged settings of a run.
 
+To see the settings that Codeseam will use, and to check them, run `codeseam doctor`. It shows the effective settings and their sources, and it tells you about problems before you start an analysis.
+
 ## Create a configuration file
 
 1. Go to the root directory of your repository.

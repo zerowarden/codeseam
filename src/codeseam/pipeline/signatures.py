@@ -32,9 +32,9 @@ from codeseam.cache import (
     AnalysisCacheContext,
     LanguageRunCache,
     cached_relation_detail_feature_map,
-    cached_relation_pair_builder,
     relation_detail_cache_key,
     relation_detail_identity,
+    relation_pair_store,
     store_relation_detail_feature_map,
 )
 from codeseam.config import Config
@@ -113,7 +113,7 @@ def build_signature_artifacts(  # noqa: PLR0913
     clusters = Clusters(
         clusters=build_clusters(
             signatures,
-            relation_pair_builder=cached_relation_pair_builder(caches),
+            pair_cache=relation_pair_store(caches),
             split_test=config.split_test,
             feature_hydrator=_relation_feature_hydrator(
                 _RelationHydrationContext(

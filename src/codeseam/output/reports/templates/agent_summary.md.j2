@@ -9,9 +9,24 @@
 - Targets by action status: {{ summary.targets_by_action_status|md_json }}
 - Listed targets: {{ listed_target_count|md_text }}{% if omitted_target_count %}; omitted by config: {{ omitted_target_count|md_text }}{% endif %}
 
+{% if completeness %}
+
+## Analysis Completeness
+- Coverage: {{ completeness.coverage|md_code }}
+{% for reason in completeness.reasons %}
+- {{ reason|md_text }}
+{% endfor %}
+- Files: {{ completeness.files|md_json }}
+- Functions extracted: {{ completeness.function_count|md_text }}
+
+{% endif %}
 ## Agent-Visible Review Targets
 {% if not agent_targets %}
+{% if completeness and completeness.coverage != "complete" %}
+- No agent-visible review targets were generated, but the analysis was not complete. Do not read this as "no repetition"; see Analysis Completeness.
+{% else %}
 - No agent-visible review targets were generated.
+{% endif %}
 {% else %}
 {% for target in agent_targets %}
 {{ target.index|md_text }}. {{ target.target_id|md_code }} - {{ target.title|md_text }}

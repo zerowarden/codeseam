@@ -65,7 +65,7 @@ def profile_command(args: argparse.Namespace) -> CliOutput:
 
 def _clear_profile_cache(args: argparse.Namespace) -> None:
     repo_root_arg = getattr(args, "repo_root", None)
-    clear_persistent_cache(load_config(detect_repo_root(_explicit_repo_root(repo_root_arg))))
+    clear_persistent_cache(load_config(detect_repo_root(explicit_repo_root(repo_root_arg))))
 
 
 def analyze_command(args: argparse.Namespace) -> CliOutput:
@@ -151,7 +151,7 @@ def _config_from_args(args: argparse.Namespace) -> Config:
     repo_root_arg = getattr(args, "repo_root", None)
     if path_arg and repo_root_arg:
         raise ConfigError("Use either analyze [path] or --repo-root, not both")
-    explicit = _explicit_repo_root(path_arg or repo_root_arg)
+    explicit = explicit_repo_root(path_arg or repo_root_arg)
     repo_root = detect_repo_root(explicit)
     overrides: Json = {}
     include = _patterns_arg(args, "include")
@@ -179,7 +179,7 @@ def _default_exclusions() -> list[str]:
     return list(DEFAULT_EXCLUDES)
 
 
-def _explicit_repo_root(value: str | None) -> Path | None:
+def explicit_repo_root(value: str | None) -> Path | None:
     if not value:
         return None
     path = Path(value)

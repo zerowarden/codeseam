@@ -26,6 +26,14 @@ from codeseam.analysis.relations.member_model import (
 from codeseam.analysis.relations.unification import SequenceSkeleton
 
 
+@dataclass(frozen=True, slots=True)
+class AbstractionRisk:
+    """How risky it is to perform an abstraction"""
+
+    kind: str
+    message: str = ""
+
+
 @dataclass(frozen=True)
 class SimilarityScores:
     name: float
@@ -365,6 +373,7 @@ class RelationPair:
 
 
 __all__ = [
+    "AbstractionRisk",
     "AbstractionCostComponents",
     "AbstractionEstimate",
     "AbstractionKind",

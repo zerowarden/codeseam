@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from codeseam.analysis import SurfacedFindings
+from codeseam.analysis import CompletenessSummary, SurfacedFindings
 from codeseam.output.reports.template_models import agent_summary_model, readme_model
 from codeseam.output.reports.templates import render_template
 from codeseam.output.serializers.review import target_review_tier_counts
@@ -39,8 +39,11 @@ def build_report(  # noqa: PLR0913
     }
 
 
-def build_metrics(report: Json, surfaced: SurfacedFindings) -> Json:
+def build_metrics(
+    report: Json, surfaced: SurfacedFindings, completeness: CompletenessSummary | None = None
+) -> Json:
     return {
+        "completeness": completeness.payload() if completeness else None,
         "schema_version": "codeseam.metrics.v1",
         "summary": as_json_object(report.get("summary")),
         "analysis_target_count": len(surfaced.analysis),

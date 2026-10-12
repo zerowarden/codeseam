@@ -14,8 +14,8 @@ from codeseam.analysis import (
     assess_target,
     build_policy_constant_clusters,
 )
-from codeseam.analysis.assessment.definitions import FindingActionStatus
-from codeseam.analysis.findings.drafts import build_policy_constant_drafts
+from codeseam.analysis.findings.definitions import FindingActionStatus
+from codeseam.analysis.findings.policy_drafts import build_policy_constant_drafts
 
 ORDER = '{"high": 0, "medium": 1, "low": 2, "info": 3}'
 

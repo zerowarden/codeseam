@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from codeseam.analysis.assessment.cluster.models import (
-    CandidateGenerationSummary,
+from codeseam.analysis.clusters.models import (
     Cluster,
-    ClusterEnrichment,
     ClusterMember,
     Clusters,
-    ClusterSummary,
-    LineRange,
     PolicyConstantCluster,
     PolicyConstantMatch,
+)
+from codeseam.analysis.relations.enrichment_models import (
+    CandidateGenerationSummary,
+    ClusterEnrichment,
+    ClusterSummary,
+    LineRange,
     StructuralSubcluster,
     SubclusterScores,
 )

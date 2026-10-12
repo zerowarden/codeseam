@@ -32,10 +32,9 @@ from codeseam.cache.relation_detail import (
     store_relation_detail_features,
 )
 from codeseam.cache.relations import (
-    cached_relation_pair_builder,
-    cached_relation_pairs,
-    cached_tree_comparison_provider,
+    RelationPairStore,
     relation_pair_cache_key,
+    relation_pair_store,
     tree_comparison_features,
 )
 from codeseam.cache.repository import (
@@ -93,10 +92,9 @@ __all__ = [
     "cached_file_analysis",
     "cached_relation_detail_feature_map",
     "cached_relation_detail_features",
-    "cached_relation_pair_builder",
-    "cached_relation_pairs",
+    "RelationPairStore",
+    "relation_pair_store",
     "cached_repository_facts",
-    "cached_tree_comparison_provider",
     "cache_blob",
     "cache_key",
     "cache_stats",

@@ -5,8 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
-from codeseam.analysis.assessment.cluster.models import Cluster, ClusterMember
-from codeseam.analysis.assessment.definitions import ExtractionConfidence
+from codeseam.analysis.clusters.models import Cluster, ClusterMember
 from codeseam.analysis.relations import EvidenceKind, RelationKind
 from codeseam.analysis.relations.content import (
     ContentEdge,
@@ -16,15 +15,16 @@ from codeseam.analysis.relations.content import (
 )
 from codeseam.analysis.relations.enrichment import (
     RelationFeatureHydrator,
-    RelationPairBuilder,
     enrich_signature_cluster,
 )
 from codeseam.analysis.relations.normalization import (
     has_argument_normalization_transform,
     shared_operation_candidate,
 )
+from codeseam.analysis.relations.pairs import PairCache
 from codeseam.analysis.signatures import (
     AdapterId,
+    ExtractionConfidence,
     LanguageFamily,
     NormalizationLevel,
     SignatureAnalysis,
@@ -54,7 +54,7 @@ TEST_RELATION_ROLES = frozenset({"test", "fixture"})
 def build_clusters(
     signatures: Sequence[SignatureAnalysis | SignatureCore],
     *,
-    relation_pair_builder: RelationPairBuilder | None = None,
+    pair_cache: PairCache | None = None,
     split_test: bool = True,
     feature_hydrator: RelationFeatureHydrator | None = None,
 ) -> tuple[Cluster, ...]:
@@ -76,7 +76,7 @@ def build_clusters(
                 language=language,
                 shape_hash=shape_hash,
                 members=members,
-                relation_pair_builder=relation_pair_builder,
+                pair_cache=pair_cache,
                 split_test=split_test,
                 feature_hydrator=feature_hydrator,
             )
@@ -84,7 +84,7 @@ def build_clusters(
     adapter_wrappers = _adapter_wrapper_clusters(
         analyses,
         start_index=len(same_language) + 1,
-        relation_pair_builder=relation_pair_builder,
+        pair_cache=pair_cache,
         feature_hydrator=feature_hydrator,
     )
     content = _content_clusters(
@@ -92,13 +92,13 @@ def build_clusters(
         start_index=len(same_language) + len(adapter_wrappers) + 1,
         seen=_emitted_pair_keys([*same_language, *adapter_wrappers]),
         split_test=split_test,
-        relation_pair_builder=relation_pair_builder,
+        pair_cache=pair_cache,
         feature_hydrator=feature_hydrator,
     )
     analogous = _analogous_clusters(
         analyses,
         start_index=len(same_language) + len(adapter_wrappers) + len(content) + 1,
-        relation_pair_builder=relation_pair_builder,
+        pair_cache=pair_cache,
     )
     return tuple([*same_language, *adapter_wrappers, *content, *analogous])
 
@@ -109,7 +109,7 @@ def _content_clusters(  # noqa: PLR0913
     start_index: int,
     seen: set[frozenset[MemberKey]],
     split_test: bool,
-    relation_pair_builder: RelationPairBuilder | None,
+    pair_cache: PairCache | None,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     """Clusters for similar content the signature-shape stage never compared."""
@@ -128,7 +128,7 @@ def _content_clusters(  # noqa: PLR0913
             base_evidence_kind=EvidenceKind.CONTENT_SIMILARITY,
             candidate_scope="content_similarity_component",
             extra_candidate_methods=["exact_body_hash_index", "rare_shingle_index"],
-            relation_pair_builder=relation_pair_builder,
+            pair_cache=pair_cache,
             feature_hydrator=feature_hydrator,
             candidate_pairs=edges,
         )
@@ -167,7 +167,7 @@ def _same_language_clusters(  # noqa: PLR0913
     language: str,
     shape_hash: str,
     members: list[SignatureAnalysis],
-    relation_pair_builder: RelationPairBuilder | None,
+    pair_cache: PairCache | None,
     split_test: bool,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
@@ -177,7 +177,7 @@ def _same_language_clusters(  # noqa: PLR0913
             language=language,
             shape_hash=shape_hash,
             members=members,
-            relation_pair_builder=relation_pair_builder,
+            pair_cache=pair_cache,
             feature_hydrator=feature_hydrator,
         )
     return _same_language_clusters_unsplit(
@@ -185,7 +185,7 @@ def _same_language_clusters(  # noqa: PLR0913
         language=language,
         shape_hash=shape_hash,
         members=members,
-        relation_pair_builder=relation_pair_builder,
+        pair_cache=pair_cache,
         split_test=split_test,
         feature_hydrator=feature_hydrator,
     )
@@ -197,7 +197,7 @@ def _same_language_clusters_unsplit(  # noqa: PLR0913
     language: str,
     shape_hash: str,
     members: list[SignatureAnalysis],
-    relation_pair_builder: RelationPairBuilder | None,
+    pair_cache: PairCache | None,
     split_test: bool,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
@@ -207,7 +207,7 @@ def _same_language_clusters_unsplit(  # noqa: PLR0913
                 start_index=start_index,
                 language=language,
                 members=members,
-                relation_pair_builder=relation_pair_builder,
+                pair_cache=pair_cache,
                 feature_hydrator=feature_hydrator,
             )
         return [
@@ -216,7 +216,7 @@ def _same_language_clusters_unsplit(  # noqa: PLR0913
                 language,
                 shape_hash,
                 members,
-                relation_pair_builder=relation_pair_builder,
+                pair_cache=pair_cache,
                 feature_hydrator=feature_hydrator,
             )
         ]
@@ -224,7 +224,7 @@ def _same_language_clusters_unsplit(  # noqa: PLR0913
         start_index=start_index,
         language=language,
         members=members,
-        relation_pair_builder=relation_pair_builder,
+        pair_cache=pair_cache,
         feature_hydrator=feature_hydrator,
     )
 
@@ -241,7 +241,7 @@ def _test_role_split_clusters(  # noqa: PLR0913
     language: str,
     shape_hash: str,
     members: list[SignatureAnalysis],
-    relation_pair_builder: RelationPairBuilder | None,
+    pair_cache: PairCache | None,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     buckets: dict[str, list[SignatureAnalysis]] = defaultdict(list)
@@ -257,7 +257,7 @@ def _test_role_split_clusters(  # noqa: PLR0913
                 language=language,
                 shape_hash=sha256_text("|".join((shape_hash, "split_test", role))),
                 members=sorted(group, key=_signature_location_key),
-                relation_pair_builder=relation_pair_builder,
+                pair_cache=pair_cache,
                 split_test=True,
                 feature_hydrator=feature_hydrator,
             )
@@ -304,7 +304,7 @@ def _broad_test_clusters(  # noqa: PLR0913
     start_index: int,
     language: str,
     members: list[SignatureAnalysis],
-    relation_pair_builder: RelationPairBuilder | None,
+    pair_cache: PairCache | None,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     duplicate_groups, remaining = _exact_body_duplicate_groups(members)
@@ -320,7 +320,7 @@ def _broad_test_clusters(  # noqa: PLR0913
                 scope="broad_test_signature_exact_body",
                 candidate_scope="exact_body_hash_before_broad_test_degradation",
                 extra_candidate_methods=["exact_body_hash_preserved"],
-                relation_pair_builder=relation_pair_builder,
+                pair_cache=pair_cache,
                 feature_hydrator=feature_hydrator,
             )
         )
@@ -343,7 +343,7 @@ def _broad_unknown_clusters(  # noqa: PLR0913
     start_index: int,
     language: str,
     members: list[SignatureAnalysis],
-    relation_pair_builder: RelationPairBuilder | None,
+    pair_cache: PairCache | None,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     duplicate_groups, remaining = _exact_body_duplicate_groups(members)
@@ -359,7 +359,7 @@ def _broad_unknown_clusters(  # noqa: PLR0913
                 scope="broad_unknown_signature_exact_body",
                 candidate_scope="exact_body_hash_before_broad_unknown_degradation",
                 extra_candidate_methods=["exact_body_hash_preserved"],
-                relation_pair_builder=relation_pair_builder,
+                pair_cache=pair_cache,
                 feature_hydrator=feature_hydrator,
             )
         )
@@ -416,7 +416,7 @@ def _cluster(  # noqa: PLR0913
     base_evidence_kind: EvidenceKind = EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
     candidate_scope: str = "within_signature_shape_bucket",
     extra_candidate_methods: list[str] | None = None,
-    relation_pair_builder: RelationPairBuilder | None = None,
+    pair_cache: PairCache | None = None,
     feature_hydrator: RelationFeatureHydrator | None = None,
     candidate_pairs: Sequence[ContentEdge] | None = None,
 ) -> Cluster:
@@ -426,7 +426,7 @@ def _cluster(  # noqa: PLR0913
             base_evidence_kind=base_evidence_kind,
             candidate_scope=candidate_scope,
             extra_candidate_methods=extra_candidate_methods or [],
-            relation_pair_builder=relation_pair_builder,
+            pair_cache=pair_cache,
             feature_hydrator=feature_hydrator,
             candidate_pairs=candidate_pairs,
         )
@@ -462,7 +462,7 @@ def _adapter_wrapper_clusters(
     signatures: list[SignatureAnalysis],
     *,
     start_index: int,
-    relation_pair_builder: RelationPairBuilder | None,
+    pair_cache: PairCache | None,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     clusters: list[Cluster] = []
@@ -475,7 +475,7 @@ def _adapter_wrapper_clusters(
             base_evidence_kind=EvidenceKind.ARGUMENT_NORMALIZATION_WRAPPER,
             candidate_scope="cross_signature_argument_normalization_bucket",
             extra_candidate_methods=["argument_normalization_wrapper_bucket"],
-            relation_pair_builder=relation_pair_builder,
+            pair_cache=pair_cache,
             feature_hydrator=feature_hydrator,
         )
         if _has_argument_normalization_pair(cluster):
@@ -644,7 +644,7 @@ def _analogous_clusters(
     signatures: list[SignatureAnalysis],
     *,
     start_index: int,
-    relation_pair_builder: RelationPairBuilder | None,
+    pair_cache: PairCache | None,
 ) -> list[Cluster]:
     grouped: dict[str, list[SignatureAnalysis]] = defaultdict(list)
     for signature in signatures:
@@ -662,7 +662,7 @@ def _analogous_clusters(
                 sorted(members, key=_signature_location_key),
                 scope=_scope_for(members),
                 enrich=False,
-                relation_pair_builder=relation_pair_builder,
+                pair_cache=pair_cache,
             )
         )
     return clusters

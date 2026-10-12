@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codeseam.analysis.assessment.definitions import EvidenceQuality, ExtractionConfidence
+from codeseam.analysis.assessment.definitions import EvidenceQuality
 from codeseam.analysis.assessment.evidence import (
     EVIDENCE_ARGUMENT_NORMALIZATION_WRAPPER,
     EVIDENCE_BODY_STRUCTURE_SIMILARITY,
@@ -19,6 +19,7 @@ from codeseam.analysis.assessment.models import (
 )
 from codeseam.analysis.assessment.policy import DetectionPolicy
 from codeseam.analysis.findings import FindingMetrics
+from codeseam.analysis.signatures import ExtractionConfidence
 
 ARGUMENT_NORMALIZATION_SUPPORT = frozenset(
     {

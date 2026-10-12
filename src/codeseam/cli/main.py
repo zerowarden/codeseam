@@ -9,6 +9,7 @@ from codeseam.cli.commands.analyze import (
     profile_command,
 )
 from codeseam.cli.commands.cache import cache_clear_command, cache_stats_command
+from codeseam.cli.commands.doctor import doctor_command
 from codeseam.cli.commands.explain import explain_command
 from codeseam.cli.commands.init import init_command
 from codeseam.cli.exit_codes import (
@@ -96,6 +97,7 @@ def _handler(name: str) -> Callable[[argparse.Namespace], CliOutput]:
         "profile": profile_command,
         "init": init_command,
         "explain": explain_command,
+        "doctor": doctor_command,
         "cache_stats": cache_stats_command,
         "cache_clear": cache_clear_command,
     }
