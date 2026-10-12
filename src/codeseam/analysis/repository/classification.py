@@ -14,11 +14,22 @@ CONFIG_NAMES = {
     "setup.cfg",
 }
 CONFIG_SUFFIXES = {".cfg", ".ini", ".json", ".toml", ".yaml", ".yml"}
-TEST_MARKERS = {"test", "tests", "__tests__", "spec", "specs"}
+TEST_MARKERS = {
+    "__tests__",
+    "integration-test",
+    "integration-tests",
+    "integration_test",
+    "integration_tests",
+    "test",
+    "tests",
+    "testing",
+}
 FIXTURE_MARKERS = {"fixture", "fixtures", "golden", "snapshots"}
 GENERATED_MARKERS = {"generated", "gen"}
 VENDOR_MARKERS = {"vendor", "third_party", "third-party", "node_modules", ".yarn"}
-BUILD_MARKERS = {"build", "dist", "coverage", ".next", ".nuxt"}
+# Root-level `build/` and `coverage/` are excluded from scans; nested ones are
+# as often source packages (`coverage/` in coverage.py, `pkg/build/`) as output.
+BUILD_MARKERS = {"dist", ".next", ".nuxt"}
 
 
 @dataclass(frozen=True)
@@ -68,24 +79,18 @@ def _looks_like_test(
     name: str,
     language_test_path: Callable[[Path], bool] | None,
 ) -> bool:
+    """Shared test directories, then the language's own naming convention."""
+    if parts & TEST_MARKERS:
+        return True
+    if language_test_path is not None:
+        return language_test_path(path)
     suffix = "".join(Path(name).suffixes).lower()
     stem = name[: -len(suffix)] if suffix else name
     return (
-        _general_test_name(stem, name)
-        or bool(parts & TEST_MARKERS)
-        or (language_test_path is not None and language_test_path(path))
-    )
-
-
-def _general_test_name(stem: str, name: str) -> bool:
-    return (
         stem.startswith("test_")
-        or stem.endswith("_test")
-        or stem.endswith("_tests")
+        or stem.endswith(("_test", "_tests"))
         or ".test." in name
         or ".spec." in name
-        or name.startswith("test.")
-        or name.startswith("spec.")
     )
 
 

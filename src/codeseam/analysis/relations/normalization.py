@@ -8,10 +8,13 @@ from codeseam.analysis.relations.models import (
     MemberFeatures,
     MemberInput,
 )
-from codeseam.analysis.signatures import CallFingerprint, call_kwarg_shape_values
+from codeseam.analysis.signatures import (
+    NORMALIZATION_TRANSFORM_METHODS,
+    CallFingerprint,
+    call_kwarg_shape_values,
+)
 from codeseam.platform import text
 
-NORMALIZATION_TRANSFORM_METHODS = {"decode", "encode"}
 ONE_PARAMETER = 1
 
 

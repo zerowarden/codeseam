@@ -25,6 +25,12 @@ class RepositoryFileAnalysis:
     by_path: dict[str, FileAnalysisResult]
     policy_constants: tuple[PolicyConstant, ...]
 
+    @property
+    def diagnostics(self) -> dict[str, tuple[str, ...]]:
+        return {
+            path: result.diagnostics for path, result in self.by_path.items() if result.diagnostics
+        }
+
 
 def analyze_selected_files(
     config: Config,

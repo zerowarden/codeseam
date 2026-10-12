@@ -30,11 +30,11 @@ def test_analyze_ci_outputs_compact_summary_only(cli_runner: CliRunner) -> None:
             "CI surface:",
             "No failing targets surfaced.",
             "Full results kept in artifacts:",
-            "- .codeseam/reports/ci/codeseam-report.json",
-            "- .codeseam/reports/ci/codeseam-report.sarif",
-            "- .codeseam/reports/ci/codeseam-summary.md",
+            ".codeseam/reports/agent/analysis.jsonl",
+            ".codeseam/reports/agent/summary.md",
         ],
     )
+    assert "codeseam-report.sarif" not in result.stdout
 
 
 def test_ci_summary_lists_failing_recommended_edits() -> None:

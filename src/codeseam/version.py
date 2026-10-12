@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import platform
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 _FALLBACK_VERSION = "0.1.0"
+# Parsers whose output feeds cached analysis; a new grammar can change every tree.
+_PARSER_DISTRIBUTIONS = ("tree-sitter", "tree-sitter-javascript", "tree-sitter-typescript")
 
 
-def _installed_version() -> str:
+def _installed_version(distribution: str = "codeseam") -> str:
     try:
-        return version("codeseam")
+        return version(distribution)
     except PackageNotFoundError:
         return _FALLBACK_VERSION
 
@@ -15,8 +20,30 @@ def _installed_version() -> str:
 __version__ = _installed_version()
 
 
+def _analysis_fingerprint() -> str:
+    """What cached analysis depends on beyond its inputs.
+
+    The package version alone misses editable-install code changes and new
+    Python or parser versions, so the fingerprint also hashes the package's own
+    source (including the semantic worker) and those runtime versions.
+    """
+
+    digest = hashlib.sha256()
+    parts = [__version__, platform.python_implementation(), platform.python_version()]
+    parts.extend(f"{name}={_installed_version(name)}" for name in _PARSER_DISTRIBUTIONS)
+    digest.update("\x1f".join(parts).encode())
+    package = Path(__file__).parent
+    for path in sorted(item for item in package.rglob("*") if item.suffix in {".py", ".mjs"}):
+        digest.update(path.relative_to(package).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+ANALYSIS_FINGERPRINT = _analysis_fingerprint()
+
+
 def _cache_version(name: str) -> str:
-    return f"{name}.{__version__}"
+    return f"{name}.{ANALYSIS_FINGERPRINT}"
 
 
 CACHE_DB = "cache.sqlite3"
@@ -29,9 +56,9 @@ CACHE_STATS_SCHEMA_VERSION = "codeseam.cache_stats.v1"
 # intentionally concise because they are persisted inside cache keys/blobs, not
 # exposed as public artifact schemas.
 FILE_ANALYSIS_CACHE_VERSION = _cache_version("file_analysis")
-FILE_ANALYSIS_CACHE_KEY_SCHEMA_VERSION = _cache_version("file_key")
+FILE_ANALYSIS_CACHE_KEY_SCHEMA_VERSION = _cache_version("file_key.v5")
 
-SIGNATURE_CORE_CACHE_RECORD_SCHEMA = _cache_version("sig_core.v8")
+SIGNATURE_CORE_CACHE_RECORD_SCHEMA = _cache_version("sig_core.v9")
 SIGNATURE_FEATURES_CACHE_RECORD_SCHEMA = _cache_version("sig_feat.v2")
 SIGNATURE_OUTPUT_CACHE_RECORD_SCHEMA = _cache_version("sig_output.v4")
 FUNCTION_CACHE_RECORD_SCHEMA = _cache_version("fn_core")
@@ -41,16 +68,12 @@ REPOSITORY_FACTS_CACHE_KEY_SCHEMA = _cache_version("repo_facts_key")
 REPOSITORY_FACTS_CACHE_VALUE_VERSION = _cache_version("repo_facts_value")
 SCAN_MANIFEST_SCHEMA_VERSION = _cache_version("scan_manifest.v1")
 
-RELATION_PAIR_CACHE_VERSION = _cache_version("rel_pair.v2")
+RELATION_PAIR_CACHE_VERSION = _cache_version("rel_pair.v5")
 RELATION_PAIR_CACHE_KEY_SCHEMA = _cache_version("rel_pair_key")
 RELATION_PAIR_CACHE_VALUE_VERSION = _cache_version("rel_pair_value.v2")
-RELATION_PAIR_GROUP_CACHE_VERSION = _cache_version("rel_group.v2")
-RELATION_PAIR_GROUP_CACHE_KEY_SCHEMA = _cache_version("rel_group_key")
-RELATION_PAIR_GROUP_CACHE_VALUE_VERSION = _cache_version("rel_group_value.v2")
-RELATION_PAIR_REF_CACHE_KEY_SCHEMA = _cache_version("rel_pair_ref_key")
-RELATION_DETAIL_CACHE_KEY_SCHEMA = _cache_version("rel_detail_key")
-RELATION_DETAIL_CACHE_VALUE_VERSION = _cache_version("rel_detail_value.v2")
-TREE_COMPARISON_CACHE_VERSION = _cache_version("tree_comp")
+RELATION_DETAIL_CACHE_KEY_SCHEMA = _cache_version("rel_detail_key.v3")
+RELATION_DETAIL_CACHE_VALUE_VERSION = _cache_version("rel_detail_value.v3")
+TREE_COMPARISON_CACHE_VERSION = _cache_version("tree_comp.v2")
 TREE_COMPARISON_CACHE_KEY_SCHEMA = _cache_version("tree_comp_key")
 TREE_COMPARISON_CACHE_VALUE_VERSION = _cache_version("tree_comp_value")
 

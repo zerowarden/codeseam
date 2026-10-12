@@ -17,7 +17,6 @@ from codeseam.semantics.enrichment import (
     SemanticProviderMetadata,
     SemanticProviderStatus,
     SemanticSymbolIdentity,
-    semantic_mode,
     semantic_provider_status,
 )
 from codeseam.semantics.provider import (
@@ -35,8 +34,20 @@ from codeseam.semantics.selection import (
     unique_semantic_candidates,
 )
 from codeseam.semantics.transport import SEMANTIC_WORKER_PROTOCOL, StdioSemanticProvider
+from codeseam.semantics.worker import (
+    NODE_MISSING_REASON,
+    UNTRUSTED_REASON,
+    ProviderChoice,
+    typescript_provider,
+    typescript_worker_script,
+)
 
 __all__ = [
+    "NODE_MISSING_REASON",
+    "UNTRUSTED_REASON",
+    "ProviderChoice",
+    "typescript_provider",
+    "typescript_worker_script",
     "DEFAULT_MAX_ITEMS_PER_REQUEST",
     "SEMANTICS_SECTION",
     "SEMANTIC_MODE_KEY",
@@ -61,7 +72,6 @@ __all__ = [
     "StdioSemanticProvider",
     "build_semantic_enrichment_requests",
     "run_semantic_enrichment",
-    "semantic_mode",
     "semantic_mode_from_config",
     "semantic_provider_status",
     "unique_semantic_candidates",

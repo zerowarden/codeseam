@@ -69,11 +69,13 @@ def run_semantic_enrichment(
     mode: SemanticMode,
     provider: SemanticProvider | None = None,
     budget: SemanticBudget | None = None,
+    unavailable_reason: str = "",
 ) -> SemanticEnrichmentRun:
     """Run optional semantic enrichment after candidate selection.
 
-    `off` is a true no-op. `auto` and `project` are allowed to fall back to
-    parser-only evidence when no provider exists. `required` is the only mode
+    `off` is a true no-op. `auto` and `project` fall back to parser-only
+    evidence when no provider exists; the TypeScript worker additionally runs
+    the type checker for `project` (and `required`). `required` is the only mode
     that fails when candidates need semantic facts but no provider is available.
     """
 
@@ -90,13 +92,14 @@ def run_semantic_enrichment(
             caveats=("no_semantic_candidates",),
         )
     if provider is None:
+        reason = unavailable_reason or "semantic_provider_unavailable"
         if mode == SemanticMode.REQUIRED:
-            raise SemanticProviderRequiredError("semantic provider unavailable")
+            raise SemanticProviderRequiredError(f"semantic provider unavailable: {reason}")
         results = tuple(
             SemanticEnrichmentResult.unavailable(
                 request,
                 status=SemanticProviderStatus.UNAVAILABLE,
-                reason="semantic_provider_unavailable",
+                reason=reason,
             )
             for request in requests
         )
@@ -105,7 +108,7 @@ def run_semantic_enrichment(
             status=SemanticProviderStatus.UNAVAILABLE,
             requests=requests,
             results=results,
-            caveats=("semantic_provider_unavailable",),
+            caveats=(reason,),
         )
     active_budget = budget or SemanticBudget()
     results = (

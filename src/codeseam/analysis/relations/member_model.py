@@ -40,6 +40,7 @@ class MemberRef:
     end_line: int
     semantic_roles: tuple[str, ...] = ()
     semantic_role_reasons: tuple[str, ...] = ()
+    container: str = ""
 
 
 def member_ref(source: SignatureAnalysis | SignatureCore | RelationMember) -> MemberRef:
@@ -54,6 +55,7 @@ def member_ref(source: SignatureAnalysis | SignatureCore | RelationMember) -> Me
         end_line=source.end_line,
         semantic_roles=tuple(getattr(source, "semantic_roles", ())),
         semantic_role_reasons=tuple(getattr(source, "semantic_role_reasons", ())),
+        container=source.container or "",
     )
 
 
@@ -81,6 +83,7 @@ class RelationMember:
     digest: str
     semantic_roles: tuple[str, ...] = ()
     semantic_role_reasons: tuple[str, ...] = ()
+    container: str | None = None
     parameter_count: int = field(init=False)
 
     def __post_init__(self) -> None:
@@ -113,6 +116,7 @@ class RelationMember:
             caveats=tuple(caveats),
             semantic_roles=tuple(getattr(core, "semantic_roles", ())),
             semantic_role_reasons=tuple(getattr(core, "semantic_role_reasons", ())),
+            container=core.container,
             digest=member_digest_from_parts(
                 (
                     core.language,
@@ -128,6 +132,7 @@ class RelationMember:
                     core.body_shape_hash,
                     str(core.body_tree_node_count),
                     *core.statement_sequence,
+                    *core.statement_keys,
                     *core.control_context_vector,
                     *core.parameters,
                     core.return_type,

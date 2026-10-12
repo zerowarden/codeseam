@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from codeseam.analysis.assessment import ContextClassification
 from codeseam.analysis.assessment.cluster import (
     Cluster,
     PolicyConstantCluster,
@@ -41,6 +40,7 @@ class FindingLocation:
     kind: str
     symbol: str
     message: str = ""
+    container: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,13 +106,10 @@ class FindingMetrics:
     api_surface_member_count: int = 0
     api_surface_relation_pair_count: int = 0
     body_hash_match_count: int = 0
-    call_fingerprint_count: int = 0
     canonical_shape: str = ""
-    clone_type_counts: dict[str, int] | None = None
     cluster_scope: str = "same_language"
     constructor_duplicate_pair_count: int = 0
     constructor_relation_pair_count: int = 0
-    control_context_count: int = 0
     declaration_duplicate_pair_count: int = 0
     declaration_member_count: int = 0
     declaration_relation_pair_count: int = 0
@@ -124,21 +121,19 @@ class FindingMetrics:
     interface_only_duplicate_pair_count: int = 0
     interface_only_member_count: int = 0
     interface_only_relation_pair_count: int = 0
-    intra_function_duplicate_block_count: int = 0
-    intra_function_duplicate_line_count: int = 0
+    duplicate_block_count: int = 0
+    duplicate_block_line_count: int = 0
     language_count: int = 1
-    max_abstraction_cost_score: float = 0.0
+    lead_abstraction_cost_score: float = 0.0
     max_body_line_count: int = 0
-    max_hole_count: int = 0
-    max_hole_size: int = 0
-    max_name_similarity: float = 0.0
-    max_refactorability_score: float = 0.0
-    max_relatedness_score: float = 0.0
-    max_relation_confidence_score: float = 0.0
-    max_relation_risk_score: float = 0.0
-    max_stable_statement_count: int = 0
-    max_tree_node_count: int = 0
-    max_tree_similarity: float = 0.0
+    lead_hole_count: int = 0
+    lead_hole_size: int = 0
+    lead_refactorability_score: float = 0.0
+    lead_relatedness_score: float = 0.0
+    lead_confidence_score: float = 0.0
+    lead_risk_score: float = 0.0
+    lead_stable_statement_count: int = 0
+    lead_tree_similarity: float = 0.0
     member_count: int = 0
     min_body_line_count: int = 0
     min_extraction_confidence: ExtractionConfidence = ExtractionConfidence.HIGH
@@ -148,8 +143,9 @@ class FindingMetrics:
     protocol_duplicate_pair_count: int = 0
     protocol_member_count: int = 0
     protocol_relation_pair_count: int = 0
-    promoted_exact_pair_count: int = 0
-    promoted_exact_pair_member_count: int = 0
+    promoted_pair_count: int = 0
+    promoted_member_count: int = 0
+    pair_member_count: int = 0
     relation_kind_counts: dict[str, int] | None = None
     same_directory_relation_count: int = 0
     same_role_relation_count: int = 0
@@ -238,7 +234,6 @@ class FindingDraft:
     abstraction_risks: Sequence[object] | None = None
     callsite_patterns: Sequence[object] | None = None
     candidate_generation: object | None = None
-    context_classifications: list[ContextClassification] | None = None
     evidence_kinds: list[str] | None = None
     has_signature_overlap: bool = False
     line_span: int = 0
@@ -292,9 +287,6 @@ class Finding:
     candidate_generation: object | None = None
     refactor_action_candidates: tuple[RefactorAction, ...] = ()
     refactor_action_summary: RefactorActionSummary | None = None
-    context_classifications: tuple[ContextClassification, ...] = ()
-    finding_kind: str = ""
-    context_tags: tuple[str, ...] = ()
     downgrade_reasons: tuple[str, ...] = ()
     refactor_value: str = ""
     refactor_safety: str = ""

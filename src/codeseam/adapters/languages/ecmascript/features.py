@@ -1,13 +1,25 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from tree_sitter import Node
 
-from codeseam.adapters.languages.ecmascript.body_shape import normalized_body_shape, parameter_roles
+from codeseam.adapters.languages.ecmascript.body_shape import (
+    body_statements,
+    normalized_body_shape,
+    parameter_roles,
+)
 from codeseam.adapters.languages.ecmascript.runtime import iter_named_nodes, node_text
+from codeseam.adapters.languages.ecmascript.syntax_kinds import (
+    ASSIGN_EXPRESSION_KINDS,
+    CALL_TYPES,
+    CONTROL_KINDS,
+    DECLARATION_TYPES,
+    STATEMENT_KINDS,
+)
 from codeseam.analysis import (
+    DEFAULT_EXPRESSION,
+    AssignKind,
     CalleeShape,
     CallFingerprint,
     DataflowEdge,
@@ -16,20 +28,27 @@ from codeseam.analysis import (
     ExpressionShape,
     ParameterUseVector,
     ParamIR,
-    call_kwarg_shape_values,
+    StatementKind,
+    assign_token,
+    dataflow_graph_features,
+    literal_shapes,
+    normalization_transform_tokens,
+    receiver_shapes,
+    statement_arg_reads_from_graph,
+    statement_token,
 )
-from codeseam.analysis.signatures.model import OperationCompact, OperationFeatures, OperationFlow
+from codeseam.analysis.signatures.model import (
+    OperationCompact,
+    OperationFeatures,
+    OperationFlow,
+    empty_operation_features,
+    parameter_vector_features,
+)
 from codeseam.platform import identifier_tokens
 
-CALL_TYPES = frozenset({"call_expression", "new_expression"})
-BRANCH_TYPES = frozenset({"if_statement", "switch_statement", "conditional_expression"})
-LOOP_TYPES = frozenset({"for_statement", "for_in_statement", "while_statement", "do_statement"})
-TRY_TYPES = frozenset({"try_statement"})
-CATCH_TYPES = frozenset({"catch_clause"})
 ASSIGN_TYPES = frozenset(
     {"assignment_expression", "lexical_declaration", "variable_declaration", "variable_declarator"}
 )
-_STMT_ID_RE = re.compile(r"^STMT(?P<index>\d+)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +65,7 @@ def operation_features(
     include_relation_detail: bool = False,
 ) -> OperationFeatures:
     if body_node is None:
-        return _empty_features()
+        return empty_operation_features()
     args = parameter_roles(params)
     locals_ = _local_names(source, body_node)
     calls = [_call_fingerprint(source, call, args, locals_) for call in _calls(body_node)]
@@ -63,6 +82,8 @@ def operation_features(
                 body_shape=shape.shape,
                 body_shape_hash=shape.shape_hash,
                 body_tree_node_count=shape.node_count,
+                statement_keys=shape.statement_keys,
+                statement_spans=shape.statement_spans,
             )
         )
     parameter_vectors = _parameter_use_vectors(source, body_node, args, locals_)
@@ -78,21 +99,23 @@ def operation_features(
             statement_sequence=tuple(sequence),
             call_tokens=tuple(call.token for call in calls),
             parameter_default_roles=tuple(sorted(defaults.items())),
-            normalization_transform_tokens=tuple(sorted(_normalization_transform_tokens(calls))),
-            graph_features=frozenset(_graph_features(graph)),
-            literal_shapes=frozenset(_literal_shapes(defaults, calls)),
-            receiver_shapes=frozenset(_receiver_shapes(calls)),
+            normalization_transform_tokens=tuple(sorted(normalization_transform_tokens(calls))),
+            graph_features=frozenset(dataflow_graph_features(graph)),
+            literal_shapes=frozenset(literal_shapes(defaults, calls)),
+            receiver_shapes=frozenset(receiver_shapes(calls)),
             parameter_features=tuple(
                 sorted(
-                    (role, frozenset(_parameter_vector_features(vector)))
+                    (role, frozenset(parameter_vector_features(vector)))
                     for role, vector in parameter_vectors.items()
                 )
             ),
-            statement_arg_reads=_statement_arg_reads(graph),
+            statement_arg_reads=tuple(statement_arg_reads_from_graph(graph)),
             control_context_vector=tuple(_control_context_vector(body_node)),
             body_shape=shape.shape,
             body_shape_hash=shape.shape_hash,
             body_tree_node_count=shape.node_count,
+            statement_keys=shape.statement_keys,
+            statement_spans=shape.statement_spans,
         ),
         flow=OperationFlow(
             call_fingerprints=tuple(calls),
@@ -101,10 +124,6 @@ def operation_features(
             local_dataflow_graph=graph,
         ),
     )
-
-
-def _empty_features() -> OperationFeatures:
-    return OperationFeatures()
 
 
 def _local_names(source: bytes, node: Node) -> set[str]:
@@ -124,42 +143,47 @@ def _statement_sequence(
     args: dict[str, str],
     locals_: set[str],
 ) -> list[str]:
-    return [_statement_token(source, stmt, args, locals_) for stmt in _body_statements(body_node)]
+    return [_statement_token(source, stmt, args, locals_) for stmt in body_statements(body_node)]
 
 
-def _body_statements(body_node: Node) -> list[Node]:
-    if body_node.type == "statement_block":
-        return list(body_node.named_children)
-    return [body_node]
-
-
-def _statement_token(  # noqa: PLR0911
+def _statement_token(
     source: bytes,
     stmt: Node,
     args: dict[str, str],
     locals_: set[str],
 ) -> str:
-    if stmt.type == "expression_statement":
-        call = _first_call(stmt)
-        if call is not None:
-            return "CALL:" + _call_fingerprint(source, call, args, locals_).token
-    if stmt.type in CALL_TYPES:
-        return "CALL:" + _call_fingerprint(source, stmt, args, locals_).token
-    if stmt.type == "return_statement":
-        return "RETURN:" + ",".join(sorted(_arg_reads(source, stmt, args)))
-    if stmt.type in ASSIGN_TYPES:
-        return "ASSIGN:" + stmt.type
-    if stmt.type in BRANCH_TYPES:
-        return "IF" if stmt.type == "if_statement" else stmt.type.upper()
-    if stmt.type in LOOP_TYPES:
-        return "LOOP"
-    if stmt.type in TRY_TYPES:
-        return "TRY"
-    return stmt.type.upper()
+    """Map one top-level statement onto the shared `StatementKind` vocabulary.
+
+    An arrow function's expression body returns its value, like a Python lambda.
+    """
+
+    if stmt.type == "return_statement" or not _is_statement(stmt):
+        reads = ",".join(sorted(_arg_reads(source, stmt, args)))
+        return statement_token(StatementKind.RETURN, reads)
+    if stmt.type in DECLARATION_TYPES:
+        return assign_token(AssignKind.BIND)
+    expression = _statement_expression(stmt)
+    if expression is not None and expression.type in CALL_TYPES:
+        call = _call_fingerprint(source, expression, args, locals_)
+        return statement_token(StatementKind.CALL, call.token)
+    if expression is not None and (assign := ASSIGN_EXPRESSION_KINDS.get(expression.type)):
+        return assign_token(assign)
+    return statement_token(STATEMENT_KINDS.get(stmt.type, StatementKind.OTHER))
 
 
-def _first_call(node: Node) -> Node | None:
-    return next((child for child in iter_named_nodes(node) if child.type in CALL_TYPES), None)
+def _is_statement(node: Node) -> bool:
+    return node.type in STATEMENT_KINDS or node.type.endswith(("_statement", "_declaration"))
+
+
+def _statement_expression(stmt: Node) -> Node | None:
+    """The expression of an expression statement, looking through `await`."""
+
+    if stmt.type != "expression_statement" or not stmt.named_children:
+        return None
+    expression = stmt.named_children[0]
+    if expression.type == "await_expression" and expression.named_children:
+        return expression.named_children[0]
+    return expression
 
 
 def _call_fingerprint(
@@ -310,77 +334,6 @@ def _str_set(value: object) -> set[str]:
     return {str(item) for item in value}
 
 
-def _graph_features(graph: DataflowGraph) -> set[str]:
-    features = {f"node:{node.kind}:{node.label}" for node in graph.nodes}
-    features.update(
-        f"edge:{edge.kind}:{edge.from_id}:{edge.from_label}->{edge.to_id}:{edge.to_label}"
-        for edge in graph.edges
-    )
-    return features
-
-
-def _literal_shapes(default_roles: dict[str, str], calls: list[CallFingerprint]) -> set[str]:
-    shapes = {value for value in default_roles.values() if value.startswith("CONST_")}
-    for call in calls:
-        shapes.update(value for value in call.arg_roles if value.startswith("CONST_"))
-        shapes.update(
-            value for value in call_kwarg_shape_values(call) if value.startswith("CONST_")
-        )
-    return shapes
-
-
-def _receiver_shapes(calls: list[CallFingerprint]) -> set[str]:
-    shapes: set[str] = set()
-    for call in calls:
-        receiver = call.receiver_shape
-        if receiver is None:
-            continue
-        access = ".".join(receiver.access_path)
-        if shape := f"{receiver.base}.{access}".rstrip("."):
-            shapes.add(shape)
-    return shapes
-
-
-def _parameter_vector_features(vector: ParameterUseVector) -> set[str]:
-    features: set[str] = set()
-    features.update(f"access_paths:{item}" for item in vector.access_paths)
-    features.update(f"receiver_of_calls:{item}" for item in vector.receiver_of_calls)
-    features.update(f"passed_as_argument_to:{item}" for item in vector.passed_as_argument_to)
-    features.add(f"returned:{vector.returned}")
-    return features
-
-
-def _normalization_transform_tokens(calls: list[CallFingerprint]) -> set[str]:
-    tokens: set[str] = set()
-    for call in calls:
-        receiver = call.receiver_shape
-        if receiver is None or receiver.base != "ARG0" or receiver.access_path:
-            continue
-        if not _all_constant_roles(call.arg_roles):
-            continue
-        if not _all_constant_roles(call_kwarg_shape_values(call)):
-            continue
-        callee = "_".join(item for item in call.callee_shape.name_tokens if item)
-        if callee in {"decode", "encode"} and call.token:
-            tokens.add(call.token)
-    return tokens
-
-
-def _all_constant_roles(values: tuple[str, ...]) -> bool:
-    return all(value.startswith("CONST_") for value in values)
-
-
-def _statement_arg_reads(graph: DataflowGraph) -> tuple[tuple[int, tuple[str, ...]], ...]:
-    reads: list[tuple[int, tuple[str, ...]]] = []
-    for node in graph.nodes:
-        if node.kind != "statement" or not node.id.startswith("STMT") or not node.arg_reads:
-            continue
-        match = _STMT_ID_RE.match(node.id)
-        if match is not None:
-            reads.append((int(match.group("index")), node.arg_reads))
-    return tuple(reads)
-
-
 def _expr_shape(  # noqa: PLR0911
     source: bytes,
     node: Node | None,
@@ -463,7 +416,7 @@ def _local_dataflow_graph(
     nodes = [DataflowNode(id=role, label=role, kind="argument") for role in args.values()]
     edges: list[DataflowEdge] = []
     local_defs: dict[str, str] = {}
-    statements = _body_statements(node)
+    statements = body_statements(node)
     for index, stmt in enumerate(statements):
         stmt_id = f"STMT{index}"
         label = sequence[index] if index < len(sequence) else stmt.type.upper()
@@ -477,8 +430,6 @@ def _local_dataflow_graph(
         )
         edges.extend(
             DataflowEdge(
-                from_id=role,
-                to_id=stmt_id,
                 kind="arg_read",
                 from_label=role,
                 to_label=label,
@@ -486,11 +437,8 @@ def _local_dataflow_graph(
             for role in sorted(_arg_reads(source, stmt, args))
         )
         if index:
-            previous = f"STMT{index - 1}"
             edges.append(
                 DataflowEdge(
-                    from_id=previous,
-                    to_id=stmt_id,
                     kind="lexical_order",
                     from_label=sequence[index - 1],
                     to_label=label,
@@ -500,8 +448,6 @@ def _local_dataflow_graph(
             if name in local_defs:
                 edges.append(
                     DataflowEdge(
-                        from_id=local_defs[name],
-                        to_id=stmt_id,
                         kind="local_flow",
                         from_label=name,
                         to_label=label,
@@ -554,20 +500,25 @@ def _target_names(source: bytes, node: Node | None) -> set[str]:
 
 
 def _parameter_defaults(params: tuple[ParamIR, ...]) -> dict[str, str]:
-    return {f"ARG{index}": "DEFAULT" for index, param in enumerate(params) if param.has_default}
+    return {
+        f"ARG{index}": param.default_role for index, param in enumerate(params) if param.has_default
+    }
+
+
+NONE_ROLE = "CONST_NONE"
+
+
+def default_value_role(source: bytes, node: Node | None) -> str:
+    """A literal default's `CONST_*` role, else `DEFAULT_EXPRESSION`, as in Python."""
+
+    if node is None:
+        return DEFAULT_EXPRESSION
+    role = _value_role(source, node, {}, set())
+    return role if role.startswith("CONST_") else DEFAULT_EXPRESSION
 
 
 def _control_context_vector(node: Node) -> list[str]:
-    kinds = []
-    for child in iter_named_nodes(node):
-        if child.type in LOOP_TYPES:
-            kinds.append("LOOP")
-        elif child.type in BRANCH_TYPES:
-            kinds.append("BRANCH")
-        elif child.type in TRY_TYPES:
-            kinds.append("TRY")
-        elif child.type in CATCH_TYPES:
-            kinds.append("CATCH")
-        elif child.type == "await_expression":
-            kinds.append("AWAIT")
-    return sorted(set(kinds))
+    kinds = {
+        CONTROL_KINDS[child.type] for child in iter_named_nodes(node) if child.type in CONTROL_KINDS
+    }
+    return sorted(kind.value for kind in kinds)

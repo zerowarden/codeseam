@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO, cast
 
 from codeseam.platform import string_tuple
 from codeseam.semantics.enrichment import (
@@ -24,6 +26,18 @@ from codeseam.semantics.provider import SemanticBudget
 
 SEMANTIC_WORKER_PROTOCOL = "codeseam.semantic_worker.v1"
 MAX_STDERR_CAVEAT_CHARS = 1_500
+# Worker output goes to temporary files, and only this much is read back, so
+# a misbehaving worker cannot exhaust memory.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+BAD_RESPONSE = "semantic_worker_bad_response"
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerOutput:
+    returncode: int
+    stdout: str
+    stderr: str
+    truncated: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +78,7 @@ class StdioSemanticProvider:
         self,
         request: SemanticEnrichmentRequest,
         budget: SemanticBudget,
-    ) -> subprocess.CompletedProcess[str] | SemanticEnrichmentResult:
+    ) -> _WorkerOutput | SemanticEnrichmentResult:
         if not self.command:
             return _failure(
                 request,
@@ -72,28 +86,32 @@ class StdioSemanticProvider:
                 reason="semantic_worker_command_missing",
             )
         try:
-            completed = subprocess.run(
-                self.command,
-                input=_encode_request(request),
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=_timeout_seconds(budget.request_timeout_ms),
-                cwd=self.cwd,
-                env=self.env,
-            )
+            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                completed = subprocess.run(
+                    self.command,
+                    input=_encode_request(request).encode(),
+                    stdout=stdout,
+                    stderr=stderr,
+                    check=False,
+                    timeout=_timeout_seconds(budget.request_timeout_ms),
+                    cwd=self.cwd,
+                    env=self.env,
+                )
+                body, truncated = _read_bounded(stdout)
+                return _WorkerOutput(
+                    completed.returncode, body, _read_bounded(stderr)[0], truncated
+                )
         except FileNotFoundError:
             return _failure(
                 request,
                 status=SemanticProviderStatus.UNAVAILABLE,
                 reason="semantic_worker_not_found",
             )
-        except subprocess.TimeoutExpired as exc:
+        except subprocess.TimeoutExpired:
             return _failure(
                 request,
                 status=SemanticProviderStatus.TIMED_OUT,
                 reason="semantic_worker_timed_out",
-                stderr=_stderr_from_timeout(exc),
             )
         except OSError as exc:
             return _failure(
@@ -102,35 +120,68 @@ class StdioSemanticProvider:
                 reason=f"semantic_worker_os_error:{type(exc).__name__}",
             )
 
-        return completed
+
+def _read_bounded(file: IO[bytes]) -> tuple[str, bool]:
+    file.seek(0)
+    data = file.read(MAX_RESPONSE_BYTES + 1)
+    return data[:MAX_RESPONSE_BYTES].decode(errors="replace"), len(data) > MAX_RESPONSE_BYTES
 
 
 def _completed_result(
     request: SemanticEnrichmentRequest,
-    completed: subprocess.CompletedProcess[str],
+    completed: _WorkerOutput,
 ) -> SemanticEnrichmentResult:
-    if completed.returncode != 0:
+    payload = _response_payload(completed)
+    reason = payload if isinstance(payload, str) else _protocol_mismatch(request, payload)
+    if reason:
         return _failure(
             request,
             status=SemanticProviderStatus.FAILED,
-            reason="semantic_worker_failed",
+            reason=reason,
             stderr=completed.stderr,
         )
+    return _decode_result(request, cast(Mapping[str, object], payload))
+
+
+def _response_payload(completed: _WorkerOutput) -> Mapping[str, object] | str:
+    """The decoded response, or the reason there is none."""
+
+    if completed.truncated:
+        return "semantic_worker_response_too_large"
+    if completed.returncode != 0:
+        return "semantic_worker_failed"
     line = _first_output_line(completed.stdout)
     if not line:
-        return _failure(
-            request,
-            status=SemanticProviderStatus.FAILED,
-            reason="semantic_worker_empty_response",
-            stderr=completed.stderr,
-        )
+        return "semantic_worker_empty_response"
     try:
         payload = json.loads(line)
     except json.JSONDecodeError:
-        return _bad_response(request, stderr=completed.stderr)
-    if not isinstance(payload, Mapping):
-        return _bad_response(request, stderr=completed.stderr)
-    return _decode_result(request, payload)
+        return BAD_RESPONSE
+    return cast(Mapping[str, object], payload) if isinstance(payload, Mapping) else BAD_RESPONSE
+
+
+def _protocol_mismatch(request: SemanticEnrichmentRequest, payload: Mapping[str, object]) -> str:
+    """Why the response does not answer this request, or "" when it does."""
+
+    expected = {
+        "protocol_version": SEMANTIC_WORKER_PROTOCOL,
+        "request_id": request.request_id,
+        "language": request.language,
+    }
+    mismatched = [key for key, value in expected.items() if payload.get(key) != value]
+    project_key = _mapping(payload.get("project")).get("project_cache_key")
+    if project_key not in {None, request.project_cache_key}:
+        mismatched.append("project_cache_key")
+    items = payload.get("items")
+    returned = [
+        item.get("signature_id")
+        for item in (items if isinstance(items, list) else [])
+        if isinstance(item, Mapping)
+    ]
+    requested = {item.signature_id for item in request.items}
+    if len(set(returned)) != len(returned) or not set(returned) <= requested:
+        mismatched.append("items")
+    return f"semantic_worker_protocol_mismatch:{mismatched[0]}" if mismatched else ""
 
 
 def _encode_request(request: SemanticEnrichmentRequest) -> str:
@@ -183,6 +234,9 @@ def _provider(value: object, mode: SemanticMode) -> SemanticProviderMetadata:
     return SemanticProviderMetadata(
         name=_string(data.get("name")),
         mode=_mode(data.get("mode"), mode),
+        compiler_available=_boolean(data.get("compiler_available")),
+        compiler_version=_string(data.get("compiler_version")),
+        typechecker_enabled=_boolean(data.get("typechecker_enabled")),
     )
 
 
@@ -265,19 +319,6 @@ def _failure(
     )
 
 
-def _bad_response(
-    request: SemanticEnrichmentRequest,
-    *,
-    stderr: str = "",
-) -> SemanticEnrichmentResult:
-    return _failure(
-        request,
-        status=SemanticProviderStatus.FAILED,
-        reason="semantic_worker_bad_response",
-        stderr=stderr,
-    )
-
-
 def _stderr_caveats(stderr: str) -> tuple[str, ...]:
     excerpt = stderr.strip()
     if not excerpt:
@@ -285,13 +326,6 @@ def _stderr_caveats(stderr: str) -> tuple[str, ...]:
     if len(excerpt) > MAX_STDERR_CAVEAT_CHARS:
         excerpt = f"{excerpt[:MAX_STDERR_CAVEAT_CHARS]}..."
     return (f"semantic_worker_stderr:{excerpt}",)
-
-
-def _stderr_from_timeout(exc: subprocess.TimeoutExpired) -> str:
-    stderr = exc.stderr
-    if isinstance(stderr, bytes):
-        return stderr.decode(errors="replace")
-    return stderr or ""
 
 
 def _first_output_line(stdout: str) -> str:

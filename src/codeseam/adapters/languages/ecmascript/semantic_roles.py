@@ -4,6 +4,8 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from tree_sitter import Node
+
 from codeseam.analysis import (
     FunctionSemanticRole,
     FunctionSemanticRoles,
@@ -14,19 +16,24 @@ from codeseam.analysis import (
 SIMPLE_FORWARDER_MAX_BODY_LINES = 6
 DECLARATION_TYPES = frozenset({"function_signature", "method_signature"})
 DECLARATION_SUFFIXES = (".d.ts", ".d.mts", ".d.cts")
-JS_TS_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 GENERATED_NAME_MARKERS = (".pnp.",)
-TEST_NAME_STEMS = (".test", ".spec")
-TEST_NAME_SUFFIXES = tuple(
-    f"{stem}{extension}" for stem in TEST_NAME_STEMS for extension in JS_TS_EXTENSIONS
-)
-SIMPLE_FORWARDER_RE = re.compile(
-    r"^\s*\{\s*(?:return\s+)?(?:await\s+)?(?:this|[A-Za-z_$][\w$]*)\.",
-    re.DOTALL,
-)
 SIMPLE_RETURN_BODY_RE = re.compile(
     r"^\s*(?:\{\s*return\s+[^{};]+;?\s*\}|[^{};]+)\s*$",
     re.DOTALL,
+)
+CALL_TYPES = frozenset({"call_expression", "new_expression"})
+FORWARDING_STATEMENTS = frozenset({"return_statement", "expression_statement"})
+ACCESS_TYPES = frozenset({"member_expression", "subscript_expression"})
+READ_TYPES = frozenset({"identifier", "this", "super", "property_identifier"})
+LITERAL_TYPES = frozenset({"string", "number", "true", "false", "null", "undefined", "regex"})
+TRANSPARENT_TYPES = frozenset(
+    {
+        "as_expression",
+        "await_expression",
+        "non_null_expression",
+        "parenthesized_expression",
+        "satisfies_expression",
+    }
 )
 PREDICATE_SYMBOL_RE = re.compile(r"^(?:is|has|can|should|supports|allows|needs)[A-Z0-9]")
 CONTRACT_SYMBOL_RE = re.compile(r"^(?:init|create|get)[A-Z0-9]|^(?:name|tableName|type)$")
@@ -66,6 +73,7 @@ class FunctionRoleContext:
     returns_jsx: bool = False
     is_simple_forwarder: bool = False
     is_simple_return_body: bool = False
+    is_trivial_body: bool = False
     has_command_descriptor_keys: bool = False
     has_command_registry_call: bool = False
 
@@ -78,7 +86,6 @@ class JsTsRoleClassifierOptions:
 DEFAULT_ROLE_CLASSIFIER_OPTIONS = JsTsRoleClassifierOptions()
 ECMASCRIPT_PATH_ROLE_OPTIONS = PathSemanticRoleOptions(
     generated_name_markers=GENERATED_NAME_MARKERS,
-    test_name_suffixes=TEST_NAME_SUFFIXES,
     declaration_suffixes=DECLARATION_SUFFIXES,
 )
 
@@ -100,14 +107,12 @@ class FunctionRoleFacts:
     is_simple_return: bool
     is_predicate_name: bool
     is_contract_name: bool
-    has_boolean_return: bool
     has_visibility_or_override_modifier: bool
     is_render_surface: bool
     is_hook_surface: bool
     is_framework_connector: bool
     is_command_or_registry_surface: bool
     is_tiny_contract_like_method: bool
-    is_tiny_predicate_boundary: bool
     is_simple_forwarder: bool
     is_same_name_forwarder: bool
 
@@ -123,6 +128,11 @@ class RoleRule:
 
 
 SURFACE_RULES: tuple[RoleRule, ...] = (
+    RoleRule(
+        lambda context, _facts: context.is_trivial_body,
+        (FunctionSemanticRole.TRIVIAL_BODY,),
+        "a one-operation body cannot be shortened by a shared helper",
+    ),
     RoleRule(
         lambda context, _facts: context.symbol == "constructor",
         (FunctionSemanticRole.CONSTRUCTOR,),
@@ -157,11 +167,6 @@ SURFACE_RULES: tuple[RoleRule, ...] = (
         lambda _context, facts: facts.is_tiny_contract_like_method,
         (FunctionSemanticRole.IMPLEMENTATION_CONTRACT_METHOD,),
         "small methods defining implementation contracts are API surface",
-    ),
-    RoleRule(
-        lambda _context, facts: facts.is_tiny_predicate_boundary,
-        (FunctionSemanticRole.PREDICATE_BOUNDARY,),
-        "small predicate helpers often encode separate intent boundaries",
     ),
 )
 
@@ -214,7 +219,6 @@ def role_facts(
     is_simple_return = context.is_simple_return_body or _simple_return_body(context.body_text)
     is_predicate_name = bool(PREDICATE_SYMBOL_RE.match(context.symbol))
     is_contract_name = bool(CONTRACT_SYMBOL_RE.match(context.symbol))
-    has_boolean_return = bool(re.search(r":\s*boolean\b", context.raw_signature))
     has_visibility_or_override_modifier = bool(
         re.search(r"\b(?:override|protected|public|static)\b", context.raw_signature)
     )
@@ -222,10 +226,7 @@ def role_facts(
         context.syntax_kind == "abstract_method_signature"
         or _abstract_signature(context.raw_signature)
     )
-    is_simple_forwarder = bool(
-        context.is_simple_forwarder
-        or (context.body_text and is_small_body and _simple_forwarder(context.body_text))
-    )
+    is_simple_forwarder = context.is_simple_forwarder
     return FunctionRoleFacts(
         is_declaration_signature=context.syntax_kind in DECLARATION_TYPES,
         is_abstract_signature=is_abstract_signature,
@@ -235,7 +236,6 @@ def role_facts(
         is_simple_return=is_simple_return,
         is_predicate_name=is_predicate_name,
         is_contract_name=is_contract_name,
-        has_boolean_return=has_boolean_return,
         has_visibility_or_override_modifier=has_visibility_or_override_modifier,
         is_render_surface=_render_surface(context),
         is_hook_surface=_hook_surface(context),
@@ -248,12 +248,6 @@ def role_facts(
             has_contract_marker=(
                 is_predicate_name or is_contract_name or has_visibility_or_override_modifier
             ),
-        ),
-        is_tiny_predicate_boundary=_tiny_predicate_boundary(
-            context,
-            is_simple_return=is_simple_return,
-            is_predicate_name=is_predicate_name,
-            has_boolean_return=has_boolean_return,
         ),
         is_simple_forwarder=is_simple_forwarder,
         is_same_name_forwarder=is_simple_forwarder
@@ -375,30 +369,104 @@ def _tiny_contract_like_method(
     )
 
 
-def _tiny_predicate_boundary(
-    context: FunctionRoleContext,
-    *,
-    is_simple_return: bool,
-    is_predicate_name: bool,
-    has_boolean_return: bool,
-) -> bool:
-    return (
-        is_predicate_name
-        and context.body_line_count <= SIMPLE_FORWARDER_MAX_BODY_LINES
-        and (is_simple_return or has_boolean_return)
-    )
-
-
 def _simple_return_body(body_text: str) -> bool:
     return bool(body_text and SIMPLE_RETURN_BODY_RE.match(body_text))
 
 
-def _simple_forwarder(body_text: str) -> bool:
-    return bool(SIMPLE_FORWARDER_RE.match(body_text))
-
-
 def _same_name_forwarder(symbol: str, body_text: str) -> bool:
     return bool(symbol and re.search(rf"\.{re.escape(symbol)}\s*\(", body_text))
+
+
+def trivial_body(body: Node | None) -> bool:
+    """One operation: return or evaluate a constant or a read, store a read, or
+    make one call on reads. Operators, nested calls and templates encode a rule."""
+
+    if body is None:
+        return False
+    if body.type != "statement_block":
+        return _trivial_expression(body)
+    statements = _named(body)
+    if len(statements) != 1:
+        return not statements
+    statement = statements[0]
+    values = _named(statement)
+    if statement.type == "return_statement":
+        return not values or _trivial_expression(values[0])
+    return (
+        statement.type == "expression_statement"
+        and bool(values)
+        and (_trivial_expression(values[0]))
+    )
+
+
+def delegating_call(body: Node | None) -> bool:
+    """The whole body is one member call: `return this.store.load(id)`, `api.on(e, cb)`.
+
+    Statement count matters: a body that merely starts with `console.log(...)` and
+    goes on to do work is not a forwarder.
+    """
+
+    if body is None:
+        return False
+    if body.type == "statement_block":
+        statements = _named(body)
+        if len(statements) != 1 or statements[0].type not in FORWARDING_STATEMENTS:
+            return False
+        values = _named(statements[0])
+        if not values:
+            return False
+        body = values[0]
+    call = _unwrapped(body)
+    callee = call.child_by_field_name("function")
+    return (
+        call.type == "call_expression" and callee is not None and callee.type == "member_expression"
+    )
+
+
+def _trivial_expression(node: Node) -> bool:
+    node = _unwrapped(node)
+    if node.type in CALL_TYPES:
+        callee = node.child_by_field_name("function") or node.child_by_field_name("constructor")
+        arguments = node.child_by_field_name("arguments")
+        return (
+            callee is not None
+            and _is_read(callee)
+            and all(_is_operand(item) for item in (_named(arguments) if arguments else ()))
+        )
+    if node.type == "assignment_expression":
+        left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
+        return left is not None and right is not None and _is_read(left) and _is_operand(right)
+    return _is_operand(node)
+
+
+def _is_operand(node: Node) -> bool:
+    node = _unwrapped(node)
+    if node.type == "spread_element" and (values := _named(node)):
+        node = _unwrapped(values[0])
+    if node.type == "template_string":
+        return not any(child.type == "template_substitution" for child in node.named_children)
+    return node.type in LITERAL_TYPES or _is_read(node)
+
+
+def _is_read(node: Node) -> bool:
+    current: Node | None = _unwrapped(node)
+    while current is not None and current.type in ACCESS_TYPES:
+        index = current.child_by_field_name("index")
+        if index is not None and not _is_operand(index):
+            return False
+        current = current.child_by_field_name("object")
+        current = _unwrapped(current) if current is not None else None
+    return current is not None and current.type in READ_TYPES
+
+
+def _unwrapped(node: Node) -> Node:
+    while node.type in TRANSPARENT_TYPES and (values := _named(node)):
+        node = values[0]
+    return node
+
+
+def _named(node: Node) -> list[Node]:
+    return [child for child in node.named_children if child.type != "comment"]
 
 
 def _command_or_registry_surface(context: FunctionRoleContext) -> bool:
@@ -432,5 +500,7 @@ __all__ = [
     "FunctionRoleContext",
     "JsTsRoleClassifierOptions",
     "classify_function_roles",
+    "delegating_call",
     "role_facts",
+    "trivial_body",
 ]

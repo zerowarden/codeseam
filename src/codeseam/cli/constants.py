@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from codeseam.analysis import ReviewTier
 
-ANALYZE_FORMATS = ("json", "ndjson", "sarif")
+ANALYZE_FORMATS = ("json", "ndjson")
 DEFAULT_PAIR_LIMIT = 3
 DEFAULT_TARGET_LIMIT = 50
 REVIEW_TIER_LABELS = {

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# Marks a function extracted from a syntax tree that contains parse errors.
+PARSE_ERROR_CAVEAT = "parse_error_recovered"
+
 EVIDENCE_CAVEATS = (
     "Do not treat findings as proof of semantic equivalence.",
     "Structural, lexical, and signature evidence require human review.",
@@ -29,6 +32,11 @@ ADAPTER_WRAPPER_SIGNATURE_CAVEATS = (
     "The transform must preserve the intended domain contract before delegating.",
 )
 
+CONTENT_SIMILARITY_CAVEATS = (
+    "Similar implementation content is a refactoring signal, not proof of equal behavior.",
+    "Members have different signatures or sizes; a shared helper may need adapters.",
+)
+
 POLICY_CONSTANT_CAVEATS = (
     "Identical policy literals are maintainability signals, not proof of runtime bugs.",
     "Centralizing policy literals still requires a clear ownership boundary.",
@@ -44,6 +52,7 @@ __all__ = [
     "ANALOGOUS_SIGNATURE_CAVEATS",
     "BROAD_TEST_SIGNATURE_CAVEATS",
     "BROAD_UNKNOWN_SIGNATURE_CAVEATS",
+    "CONTENT_SIMILARITY_CAVEATS",
     "EVIDENCE_CAVEATS",
     "POLICY_CONSTANT_CAVEATS",
     "SIGNATURE_CAVEATS",

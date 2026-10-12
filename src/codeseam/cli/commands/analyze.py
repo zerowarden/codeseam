@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import argparse
 import cProfile
-import shutil
 import time
 from pathlib import Path
 
 from codeseam.adapters.repository.filesystem import DEFAULT_EXCLUDES, explain_file_selection
 from codeseam.adapters.repository.root import detect_repo_root
-from codeseam.cli.constants import DEFAULT_TARGET_LIMIT
+from codeseam.cli.commands.cache import clear_persistent_cache
 from codeseam.cli.exit_codes import OK, THRESHOLD_BREACHED
 from codeseam.cli.models import CliOutput, OutputOptions, cli_output
 from codeseam.cli.options import output_options
 from codeseam.cli.output import console_for
 from codeseam.cli.progress import progress_for
+from codeseam.cli.spec import add_arguments, command_specs
 from codeseam.config import Config, load_config
 from codeseam.output.serializers.analysis import AnalysisPayloadSummary, analysis_result_payload
 from codeseam.pipeline.analyze import (
@@ -26,8 +26,6 @@ from codeseam.platform import (
     Json,
     OutputPaths,
     RepositoryContextError,
-    as_json_object,
-    text_list,
 )
 from codeseam.profiling import ProfileOutput, ProfileSource, collect_profile_summary
 
@@ -36,29 +34,10 @@ def profile_command(args: argparse.Namespace) -> CliOutput:
     cache_mode = str(getattr(args, "cache_mode", "warm") or "warm")
     if cache_mode == "cold":
         _clear_profile_cache(args)
-    analyze_args = argparse.Namespace(
-        base_ref=None,
-        no_progress=True,
-        output=None,
-        path=None,
-        profile=None,
-        progress="never",
-        quiet=True,
-        repo_root=args.repo_root,
-        strict=False,
-        target_limit=DEFAULT_TARGET_LIMIT,
-        timings=False,
-        verbose=False,
-        color="auto",
-        ci=False,
-        debug=False,
-        semantic_mode=None,
-        format=None,
-        include=None,
-        exclude=None,
-        show_exclusions=False,
-        explain_files=False,
-    )
+    analyze_parser = argparse.ArgumentParser()
+    add_arguments(analyze_parser, command_specs()["analyze"]["arguments"])
+    repo_root = ["--repo-root", args.repo_root] if args.repo_root else []
+    analyze_args = analyze_parser.parse_args(["--quiet", "--progress", "never", *repo_root])
     profiler = cProfile.Profile()
     started = time.perf_counter()
     result = profiler.runcall(_analyze_command, analyze_args, include_profile_source=True)
@@ -86,10 +65,7 @@ def profile_command(args: argparse.Namespace) -> CliOutput:
 
 def _clear_profile_cache(args: argparse.Namespace) -> None:
     repo_root_arg = getattr(args, "repo_root", None)
-    config = load_config(detect_repo_root(_explicit_repo_root(repo_root_arg)))
-    cache_root = config.cache_path()
-    if cache_root.exists():
-        shutil.rmtree(cache_root)
+    clear_persistent_cache(load_config(detect_repo_root(_explicit_repo_root(repo_root_arg))))
 
 
 def analyze_command(args: argparse.Namespace) -> CliOutput:
@@ -98,19 +74,16 @@ def analyze_command(args: argparse.Namespace) -> CliOutput:
 
 def _analyze_command(args: argparse.Namespace, *, include_profile_source: bool) -> CliOutput:
     options = output_options(args)
-    if options.output_format == "sarif" and not options.ci:
-        raise ConfigError("Output format is not implemented yet: sarif")
     config = _config_from_args(args)
     if file_selection_output := _file_selection_output(args, config, options):
         return file_selection_output
-    paths = OutputPaths(config.path("output", "root"))
+    paths = OutputPaths(config.output_root)
     with progress_for(options, console_for(options)) as progress:
         run = run_analysis_pipeline(
             AnalysisPipelineRequest(
                 config=config,
                 paths=paths,
                 progress=progress,
-                base_ref=args.base_ref,
                 debug=bool(getattr(args, "debug", False)),
             ),
         )
@@ -121,6 +94,7 @@ def _analyze_command(args: argparse.Namespace, *, include_profile_source: bool) 
                 files_analysed=run.selected_file_count,
                 files_skipped=run.skipped_file_count,
                 functions_seen=run.function_count,
+                file_diagnostics=tuple(sorted(run.file_diagnostics.items())),
                 languages=tuple(
                     sorted(
                         {
@@ -164,10 +138,9 @@ def _file_selection_output(
             options=options,
         )
     if getattr(args, "explain_files", False):
-        selection = as_json_object(config.data.get("selection"))
         return cli_output(
             "file_explanation",
-            explanation=explain_file_selection(config.repo_root, selection),
+            explanation=explain_file_selection(config.repo_root, config.selection),
             options=options,
         )
     return None
@@ -191,7 +164,7 @@ def _config_from_args(args: argparse.Namespace) -> Config:
     if exclude:
         base_config = load_config(repo_root, overrides)
         overrides["selection.exclude"] = [
-            *text_list(as_json_object(base_config.data.get("selection")).get("exclude")),
+            *base_config.selection.exclude,
             *exclude,
         ]
     return load_config(repo_root, overrides)

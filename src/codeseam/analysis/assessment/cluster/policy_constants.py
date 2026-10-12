@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Hashable, Iterator
 from dataclasses import dataclass
 
-from codeseam.analysis.assessment.cluster.models import PolicyConstantCluster
+from codeseam.analysis.assessment.cluster.models import PolicyConstantCluster, PolicyConstantMatch
 from codeseam.analysis.relations import (
     AbstractionKind,
     ActionKind,
@@ -20,6 +20,25 @@ POLICY_CONSTANT_REVIEW_RELEVANCE = "duplicated_policy_constant"
 POLICY_CONSTANT_PRIORITY_HINT = "high"
 REASON_SAME_CONSTANT_NAME = "same_constant_name"
 REASON_IDENTICAL_STRUCTURED_LITERAL = "identical_structured_literal_value"
+REASON_DIFFERENT_STRUCTURED_LITERAL = "different_structured_literal_value"
+REASON_DIFFERENT_CONSTANT_NAMES = "different_constant_names"
+MATCH_REASONS = {
+    PolicyConstantMatch.IDENTICAL: (REASON_SAME_CONSTANT_NAME, REASON_IDENTICAL_STRUCTURED_LITERAL),
+    PolicyConstantMatch.DRIFTED: (REASON_SAME_CONSTANT_NAME, REASON_DIFFERENT_STRUCTURED_LITERAL),
+    PolicyConstantMatch.SCATTERED: (
+        REASON_DIFFERENT_CONSTANT_NAMES,
+        REASON_IDENTICAL_STRUCTURED_LITERAL,
+    ),
+}
+# What members must share for each match; the rest is what the match lets differ.
+MATCH_AGREEMENT: dict[PolicyConstantMatch, tuple[Callable[[PolicyConstant], str], ...]] = {
+    PolicyConstantMatch.IDENTICAL: (
+        lambda item: item.normalized_symbol,
+        lambda item: item.literal_shape_hash,
+    ),
+    PolicyConstantMatch.DRIFTED: (lambda item: item.normalized_symbol,),
+    PolicyConstantMatch.SCATTERED: (lambda item: item.literal_shape_hash,),
+}
 SOURCE_ROLE = "source"
 
 
@@ -41,6 +60,9 @@ class PolicyConstantClusterPolicy:
     mixed_role_multiplier: float = 0.85
     same_directory_multiplier: float = 1.0
     cross_directory_multiplier: float = 0.82
+    # Items every drifted variant shares, over the smallest variant: below this,
+    # a common name like `DEFAULT_FIELDS` is two unrelated tables, not a drift.
+    drift_min_overlap: float = 0.5
 
 
 POLICY_CONSTANT_CLUSTER_POLICY = PolicyConstantClusterPolicy()
@@ -48,34 +70,69 @@ POLICY_CONSTANT_CLUSTER_POLICY = PolicyConstantClusterPolicy()
 
 def build_policy_constant_clusters(
     constants: list[PolicyConstant],
+    policy: PolicyConstantClusterPolicy = POLICY_CONSTANT_CLUSTER_POLICY,
 ) -> list[PolicyConstantCluster]:
-    grouped: dict[tuple[str, str, str], list[PolicyConstant]] = defaultdict(list)
-    for constant in constants:
-        grouped[
-            (
-                constant.language,
-                constant.normalized_symbol,
-                constant.literal_shape_hash,
+    """Identical copies, copies that drifted apart, and one literal under several names."""
+    groups = [
+        *(
+            (PolicyConstantMatch.IDENTICAL, members)
+            for members in _groups(
+                constants, lambda item: (item.normalized_symbol, item.literal_shape_hash)
             )
-        ].append(constant)
-    clusters: list[PolicyConstantCluster] = []
-    for _, members in sorted(grouped.items()):
+        ),
+        *(
+            (PolicyConstantMatch.DRIFTED, members)
+            for members in _groups(
+                constants, lambda item: (item.normalized_symbol, item.literal_kind)
+            )
+            if _drift_overlap(members) >= policy.drift_min_overlap
+        ),
+        *(
+            (PolicyConstantMatch.SCATTERED, members)
+            for members in _groups(constants, lambda item: item.literal_shape_hash)
+            if len({member.normalized_symbol for member in members}) > 1
+        ),
+    ]
+    return [
+        _cluster(index, match, members, policy) for index, (match, members) in enumerate(groups, 1)
+    ]
+
+
+def _groups(
+    constants: list[PolicyConstant], key: Callable[[PolicyConstant], Hashable]
+) -> Iterator[list[PolicyConstant]]:
+    grouped: dict[tuple[str, Hashable], list[PolicyConstant]] = defaultdict(list)
+    for constant in constants:
+        grouped[(constant.language, key(constant))].append(constant)
+    for _, members in sorted(grouped.items(), key=lambda item: repr(item[0])):
         if len(members) > 1:
-            clusters.append(_cluster(len(clusters) + 1, members))
-    return clusters
+            yield members
 
 
-def _cluster(index: int, members: list[PolicyConstant]) -> PolicyConstantCluster:
+def _drift_overlap(members: list[PolicyConstant]) -> float:
+    """Shared items over the smallest variant; 0 unless literals differ across files."""
+    variants = {member.literal_shape_hash: set(member.literal_items) for member in members}
+    if len(variants) < 2 or len({member.file for member in members}) < 2:  # noqa: PLR2004
+        return 0.0
+    shared = set.intersection(*variants.values())
+    return len(shared) / max(1, min(len(items) for items in variants.values()))
+
+
+def _cluster(
+    index: int,
+    match: PolicyConstantMatch,
+    members: list[PolicyConstant],
+    policy: PolicyConstantClusterPolicy,
+) -> PolicyConstantCluster:
     first = members[0]
-    symbol = first.symbol
-    cluster_id = f"polcl_{index:06d}"
-    cluster_confidence = _cluster_confidence(members)
-    action_confidence = _action_confidence(cluster_confidence, members)
+    cluster_confidence = _cluster_confidence(match, members, policy)
+    symbols = "|".join(sorted({member.symbol for member in members}))
     return PolicyConstantCluster(
-        cluster_id=cluster_id,
+        match=match,
+        cluster_id=f"polcl_{index:06d}",
         language=first.language,
         shape_hash=first.literal_shape_hash,
-        canonical_shape=f"policy_constant({symbol}:{first.literal_kind})",
+        canonical_shape=f"policy_constant({symbols}:{first.literal_kind})",
         members=tuple(sorted(members, key=lambda item: (item.file, item.start_line))),
         review_relevance=POLICY_CONSTANT_REVIEW_RELEVANCE,
         priority_hint=POLICY_CONSTANT_PRIORITY_HINT,
@@ -85,13 +142,14 @@ def _cluster(index: int, members: list[PolicyConstant]) -> PolicyConstantCluster
         refactor_action_candidates=(
             RefactorAction(
                 kind=ActionKind.INTRODUCE_ABSTRACTION,
-                status=ActionStatus.RECOMMENDED,
-                confidence=action_confidence,
-                applies_to=(),
-                reason_codes=(
-                    REASON_SAME_CONSTANT_NAME,
-                    REASON_IDENTICAL_STRUCTURED_LITERAL,
+                status=(
+                    ActionStatus.RECOMMENDED
+                    if match is PolicyConstantMatch.IDENTICAL
+                    else ActionStatus.CONDITIONAL
                 ),
+                confidence=_action_confidence(cluster_confidence, members, policy),
+                applies_to=(),
+                reason_codes=MATCH_REASONS[match],
             ),
         ),
         refactor_action_summary=RefactorActionSummary(
@@ -102,11 +160,14 @@ def _cluster(index: int, members: list[PolicyConstant]) -> PolicyConstantCluster
 
 
 def _cluster_confidence(
+    match: PolicyConstantMatch,
     members: list[PolicyConstant],
-    policy: PolicyConstantClusterPolicy = POLICY_CONSTANT_CLUSTER_POLICY,
+    policy: PolicyConstantClusterPolicy,
 ) -> float:
+    overlap = _drift_overlap(members) if match is PolicyConstantMatch.DRIFTED else 1.0
     return round(
-        _exact_agreement(members)
+        _agreement(match, members)
+        * overlap
         * (
             1.0
             - (1.0 - _literal_specificity(members, policy))
@@ -119,7 +180,7 @@ def _cluster_confidence(
 def _action_confidence(
     cluster_confidence: float,
     members: list[PolicyConstant],
-    policy: PolicyConstantClusterPolicy = POLICY_CONSTANT_CLUSTER_POLICY,
+    policy: PolicyConstantClusterPolicy,
 ) -> float:
     return round(
         combine_product(
@@ -131,12 +192,11 @@ def _action_confidence(
     )
 
 
-def _exact_agreement(members: list[PolicyConstant]) -> float:
+def _agreement(match: PolicyConstantMatch, members: list[PolicyConstant]) -> float:
     return combine_product(
         _agreement_score(members, lambda item: item.language),
-        _agreement_score(members, lambda item: item.normalized_symbol),
-        _agreement_score(members, lambda item: item.literal_shape_hash),
         _agreement_score(members, lambda item: item.literal_kind),
+        *(_agreement_score(members, key) for key in MATCH_AGREEMENT[match]),
     )
 
 

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from collections import Counter
 
-from codeseam.analysis import FindingActionStatus, ReviewTier
+from codeseam.analysis import SurfacedFindings
 from codeseam.output.reports.template_models import agent_summary_model, readme_model
 from codeseam.output.reports.templates import render_template
-from codeseam.output.serializers.finding_buckets import is_agent_summary_target
 from codeseam.output.serializers.review import target_review_tier_counts
 from codeseam.platform import Json, OutputPaths, as_json_object, as_json_objects, text_list
 
@@ -16,14 +15,13 @@ def build_report(  # noqa: PLR0913
     *,
     config_hash: str,
     manifest: Json,
-    findings: list[Json],
     targets: Json,
     paths: OutputPaths,
     adapter_capabilities: list[Json] | None = None,
     include_debug_bundle: bool = False,
 ) -> Json:
     target_items = as_json_objects(targets.get("targets"))
-    summary = _summary(findings, target_items)
+    summary = _summary(target_items)
     artifact_index = paths.artifact_refs()
     if not include_debug_bundle:
         artifact_index.pop("debug_bundle", None)
@@ -37,43 +35,29 @@ def build_report(  # noqa: PLR0913
         "summary": summary,
         "top_review_targets": target_items[:TOP_REVIEW_TARGETS],
         "review_target_count": len(target_items),
-        "finding_count": len(findings),
         "artifact_index": artifact_index,
     }
 
 
-def build_metrics(
-    report: Json,
-    analysis_targets: list[Json],
-    observations: list[Json],
-    findings: list[Json],
-) -> Json:
-    agent_visible_targets = [
-        target for target in analysis_targets if is_agent_summary_target(target)
-    ]
+def build_metrics(report: Json, surfaced: SurfacedFindings) -> Json:
     return {
         "schema_version": "codeseam.metrics.v1",
         "summary": as_json_object(report.get("summary")),
-        "analysis_target_count": len(analysis_targets),
-        "observation_count": len(observations),
-        "agent_visible_target_count": len(agent_visible_targets),
-        "internal_finding_count": len(findings),
-        "recommended_edit_tier_count": _counts_by_review_tier(
-            [*analysis_targets, *observations]
-        ).get(
-            ReviewTier.RECOMMENDED_EDIT,
-            0,
-        ),
-        "recommended_edit_count": _counts_by_action_status(agent_visible_targets).get(
-            FindingActionStatus.RECOMMENDED_EDIT, 0
-        ),
+        "analysis_target_count": len(surfaced.analysis),
+        "observation_count": len(surfaced.observations),
+        "agent_visible_target_count": len(surfaced.agent_summary),
+        "recommended_edit_tier_count": surfaced.recommended_edit_tier_count,
+        "recommended_edit_count": surfaced.recommended_edit_count,
+        "report_target_count": len(surfaced.ranked),
+        "total_analysis_target_count": len(surfaced.analysis),
+        "total_observation_count": len(surfaced.observations),
         "artifact_index": as_json_object(report.get("artifact_index")),
     }
 
 
 def render_agent_summary(
     report: Json,
-    targets: Json,
+    targets: list[Json],
     metrics: Json,
     *,
     max_targets: int | None = None,
@@ -88,14 +72,9 @@ def render_readme(report: Json, metrics: Json) -> str:
     return render_template("meta_readme.md.j2", readme_model(report, metrics))
 
 
-def _summary(
-    findings: list[Json],
-    targets: list[Json],
-) -> Json:
+def _summary(targets: list[Json]) -> Json:
     return {
-        "finding_count": len(findings),
         "review_target_count": len(targets),
-        "findings_by_source": dict(Counter(str(finding["source"]) for finding in findings)),
         "targets_by_review_tier": _counts_by_review_tier(targets),
         "targets_by_action_status": _counts_by_action_status(targets),
         "targets_by_type": dict(Counter(str(target["target_type"]) for target in targets)),

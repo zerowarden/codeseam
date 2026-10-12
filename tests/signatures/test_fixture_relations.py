@@ -20,12 +20,14 @@ from .selectors import cluster_by_shape, cluster_with_evidence, relation_pair_by
 
 MIN_EXACT_RELATEDNESS_SCORE = 0.9
 MIN_EXACT_REFACTORABILITY_SCORE = 0.5
-MIN_WRAPPER_CONFIDENCE_SCORE = 0.7
+# The loop cores differ, and statement keys now say so (coarse tokens called them equal).
+MIN_WRAPPER_CONFIDENCE_SCORE = 0.65
 MIN_WRAPPER_REFACTORABILITY_SCORE = 0.6
 MAX_EXACT_ABSTRACTION_COST = 0.1
 MIN_DIVERGENT_ABSTRACTION_COST = 0.4
 MAX_WRAPPER_ABSTRACTION_COST = 0.4
 EXPECTED_DIVERGENT_CLUSTER_MEMBER_COUNT = 3
+DIVERGENT_SHARED_PREFIX = 2  # input guard + mkdir, then the write paths diverge
 EXPECTED_PAYLOAD_BUILDER_MEMBER_COUNT = 2
 EXPECTED_PAYLOAD_BUILDER_PAIR_COUNT = 1
 
@@ -84,7 +86,7 @@ def test_python_signature_clusters_classify_exact_structural_duplicates(
     assert_pair_classification(
         pair,
         relation_kind=RelationKind.BODY_IDENTICAL,
-        clone_type=CloneClass.TYPE_1_EXACT,
+        clone_type=CloneClass.TYPE_2_PARAMETERIZED,
         action=ActionKind.CONSOLIDATE_CLONE,
         refactorability_kind="high",
     )
@@ -161,7 +163,7 @@ def test_signature_clusters_describe_divergent_tail_refactor_shape(
 ) -> None:
     _cluster, divergent = divergent_cluster_pair
 
-    assert divergent["anti_unification"]["common_prefix_length"] == 1
+    assert divergent["anti_unification"]["common_prefix_length"] == DIVERGENT_SHARED_PREFIX
     assert divergent["anti_unification"]["template"]
     assert divergent["anti_unification"]["hole_bindings"]
     assert divergent["refactor_shape"]["holes"]

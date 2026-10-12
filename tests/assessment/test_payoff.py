@@ -4,14 +4,13 @@ from pathlib import Path
 
 from codeseam.analysis import (
     AssessmentBand,
-    AssessmentPolicy,
     FindingMetrics,
     RelationKind,
     score_maintenance_payoff,
 )
 from codeseam.config import load_config
 
-POLICY = AssessmentPolicy.from_config(load_config(Path("/repo")).data)
+POLICY = load_config(Path("/repo")).assessment
 GENERATED_VENDOR_CAP = 0.1
 
 

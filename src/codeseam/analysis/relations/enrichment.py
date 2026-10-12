@@ -10,7 +10,6 @@ from codeseam.analysis.assessment.cluster import (
     ClusterSummary,
     LineRange,
 )
-from codeseam.analysis.assessment.context import classify_contexts
 from codeseam.analysis.relations.actions import pair_actions, refactor_action_candidates
 from codeseam.analysis.relations.callables import (
     callable_members,
@@ -18,6 +17,7 @@ from codeseam.analysis.relations.callables import (
     callsite_patterns,
 )
 from codeseam.analysis.relations.candidates import (
+    oversized_exact_body_pairs,
     relation_candidate_members,
     relation_candidate_pairs,
 )
@@ -30,7 +30,6 @@ from codeseam.analysis.relations.models import (
 )
 from codeseam.analysis.relations.pairs import (
     ActionBuilder,
-    TreeEditBudget,
     relation_pairs,
     structural_duplicate_pairs,
 )
@@ -48,7 +47,7 @@ CANDIDATE_GENERATION_METHODS = (
     "call_fingerprint_overlap",
     "payload_builder_terminal_call",
     "bounded_pair_buckets",
-    "cheap_pre_tree_gate",
+    "content_ranked_pair_limit",
 )
 
 
@@ -60,7 +59,6 @@ class RelationPairBuilder(Protocol):
         action_builder: ActionBuilder,
         feature_cache: MemberFeatureCache,
         stats: dict[str, int],
-        tree_edit_budget: TreeEditBudget,
     ) -> list[RelationPair]: ...
 
 
@@ -70,25 +68,39 @@ type RelationFeatureHydrator = Callable[[Sequence[SignatureAnalysis]], list[Sign
 def enrich_signature_cluster(  # noqa: PLR0913
     members: Sequence[SignatureAnalysis],
     *,
-    base_evidence_kind: str = EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
+    base_evidence_kind: EvidenceKind = EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
     candidate_scope: str = "within_signature_shape_bucket",
     extra_candidate_methods: list[str] | None = None,
     relation_pair_builder: RelationPairBuilder | None = None,
-    tree_edit_budget: TreeEditBudget | None = None,
     feature_hydrator: RelationFeatureHydrator | None = None,
+    candidate_pairs: Sequence[tuple[MemberInput, MemberInput]] | None = None,
 ) -> ClusterEnrichment:
+    """Score a cluster's candidate pairs.
+
+    Shape clusters generate candidates from bounded buckets; content clusters
+    pass their verified edges as ``candidate_pairs``, which bypass bucketing
+    and size limits because the edges are already few and specific.
+    """
     enrichment_started = time.perf_counter()
     member_contexts = tuple(_member_mapping(member) for member in members)
     callables = callable_members(member_contexts)
     callsites = callsite_patterns(member_contexts)
     feature_cache = MemberFeatureCache(members)
-    candidate_started = time.perf_counter()
-    candidate_members = relation_candidate_members(members, feature_cache)
-    candidate_pairs = relation_candidate_pairs(candidate_members, feature_cache)
-    candidate_ms = _elapsed_ms(candidate_started)
-    candidate_pairs = _hydrate_candidate_pairs(candidate_pairs, feature_hydrator)
-    feature_cache = MemberFeatureCache(tuple(member for pair in candidate_pairs for member in pair))
     comparison_stats: dict[str, int] = {}
+    candidate_started = time.perf_counter()
+    if candidate_pairs is None:
+        candidate_members: Sequence[MemberInput] = relation_candidate_members(
+            members, feature_cache
+        )
+        pairs = [
+            *relation_candidate_pairs(candidate_members, feature_cache, comparison_stats),
+            *oversized_exact_body_pairs(members, feature_cache, comparison_stats),
+        ]
+    else:
+        candidate_members, pairs = members, list(candidate_pairs)
+    candidate_ms = _elapsed_ms(candidate_started)
+    candidate_pairs = _hydrate_candidate_pairs(pairs, feature_hydrator)
+    feature_cache = MemberFeatureCache(tuple(member for pair in candidate_pairs for member in pair))
     relation_started = time.perf_counter()
     relation_items = (
         relation_pair_builder(
@@ -96,7 +108,6 @@ def enrich_signature_cluster(  # noqa: PLR0913
             action_builder=pair_actions,
             feature_cache=feature_cache,
             stats=comparison_stats,
-            tree_edit_budget=tree_edit_budget or TreeEditBudget(),
         )
         if relation_pair_builder
         else relation_pairs(
@@ -104,7 +115,6 @@ def enrich_signature_cluster(  # noqa: PLR0913
             action_builder=pair_actions,
             feature_cache=feature_cache,
             stats=comparison_stats,
-            tree_edit_budget=tree_edit_budget,
         )
     )
     relation_ms = _elapsed_ms(relation_started)
@@ -120,11 +130,6 @@ def enrich_signature_cluster(  # noqa: PLR0913
     )
     risks = abstraction_risks(member_contexts, evidence_kinds)
     confidence = confidence_for(evidence_kinds, risks)
-    context_classifications = classify_contexts(
-        [member.core for member in members],
-        relation_items,
-        structural_pairs,
-    )
     return ClusterEnrichment(
         cluster_summary=cluster_summary(members, evidence_kinds, confidence, feature_cache),
         confidence=confidence,
@@ -156,7 +161,6 @@ def enrich_signature_cluster(  # noqa: PLR0913
         refactor_action_summary=summarize_actions(actions),
         abstraction_kind=abstraction_kind(evidence_kinds, risks),
         abstraction_risks=tuple(risks),
-        context_classifications=context_classifications,
     )
 
 
@@ -208,7 +212,7 @@ def cluster_evidence_kinds(
     callsites: Sequence[CallsitePattern],
     structural_pairs: object,
     *,
-    base_evidence_kind: str = EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
+    base_evidence_kind: EvidenceKind = EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
 ) -> list[str]:
     evidence_kinds: list[str] = [base_evidence_kind]
     if callables:

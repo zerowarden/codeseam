@@ -11,7 +11,7 @@ from codeseam.adapters.repository.scan_manifest import (
 from codeseam.analysis import RepositoryScan
 from codeseam.config import Config
 from codeseam.output.artifacts.context import write_context_artifacts
-from codeseam.platform import OutputPaths, as_json_object
+from codeseam.platform import OutputPaths
 
 
 def scan_repository(
@@ -20,12 +20,11 @@ def scan_repository(
     *,
     write_artifacts: bool = False,
 ) -> RepositoryScan:
-    selection = as_json_object(config.data.get("selection"))
-    manifest_path = scan_manifest_path(config.cache_path())
+    manifest_path = scan_manifest_path(config.cache_path)
     manifest = load_scan_manifest(manifest_path) if config.cache_enabled else None
     records, selected_paths = select_files(
         config.repo_root,
-        selection,
+        config.selection,
         scan_manifest=manifest,
     )
     if manifest is not None:

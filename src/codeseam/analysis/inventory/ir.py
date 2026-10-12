@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from codeseam.analysis.signatures import (
@@ -20,7 +21,11 @@ UNKNOWN = "UNKNOWN"
 class ParamIR:
     annotation: str | None
     name: str | None = None
-    has_default: bool = False
+    default_role: str = ""  # CONST_* or DEFAULT_EXPRESSION; "" when there is no default
+
+    @property
+    def has_default(self) -> bool:
+        return bool(self.default_role)
 
 
 @dataclass(frozen=True)
@@ -75,9 +80,19 @@ class SignatureShape:
 
 
 def signature_shape(function: FunctionIR) -> SignatureShape:
-    params = [param.annotation or UNKNOWN for param in function.params]
-    return_type = function.return_annotation or UNKNOWN
-    shape, shape_hash = canonical_shape(params, return_type, list(function.declared_generics))
+    return annotated_shape(
+        [param.annotation or UNKNOWN for param in function.params],
+        function.return_annotation or UNKNOWN,
+        function.declared_generics,
+    )
+
+
+def annotated_shape(
+    params: list[str], return_type: str, declared_generics: Sequence[str] = ()
+) -> SignatureShape:
+    """Shape, type source and caveats from declared annotations, for every adapter."""
+
+    shape, shape_hash = canonical_shape(params, return_type, list(declared_generics))
     missing_types = UNKNOWN in [*params, return_type]
     caveats = ["missing_type_annotation"] if missing_types else []
     return SignatureShape(
@@ -92,4 +107,4 @@ def signature_shape(function: FunctionIR) -> SignatureShape:
     )
 
 
-__all__ = ["FunctionIR", "ParamIR", "SignatureShape", "signature_shape"]
+__all__ = ["FunctionIR", "ParamIR", "SignatureShape", "annotated_shape", "signature_shape"]

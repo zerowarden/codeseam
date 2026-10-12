@@ -167,3 +167,30 @@ def test_tree_skeleton_uses_root_hole_for_different_nodes() -> None:
     assert skeleton.stable_node_ratio == 0.0
     assert skeleton.hole_bindings["left"]["H0"] == (OrderedTree("Return"),)
     assert skeleton.hole_bindings["right"]["H0"] == (OrderedTree("Raise"),)
+
+
+def test_sequence_skeleton_treats_reordered_statements_as_stable() -> None:
+    tokens = ["IF", "IF", "IF", "RETURN:"]
+
+    skeleton = anti_unify_sequences(
+        tokens,
+        tokens,
+        left_keys=["guard_a", "guard_b", "guard_c", "ret"],
+        right_keys=["guard_c", "guard_a", "guard_b", "ret"],
+    )
+
+    assert skeleton.hole_count == 0
+    assert skeleton.stable_statement_count == len(tokens)
+    assert skeleton.common_prefix_length == 0
+
+
+def test_sequence_skeleton_aligns_by_key_not_by_token() -> None:
+    skeleton = anti_unify_sequences(
+        ["ASSIGN:Assign", "RETURN:"],
+        ["ASSIGN:Assign", "RETURN:"],
+        left_keys=["load", "ret"],
+        right_keys=["hash", "ret"],
+    )
+
+    assert skeleton.hole_count == 1
+    assert skeleton.stable_statement_count == 1

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import InitVar, dataclass, field
 from typing import cast
 
-from codeseam.platform import Json, sha256_text
+from codeseam.platform import Json, content_ids, qualified_symbol, sha256_text
 
 type FunctionCacheRecord = tuple[
     str,
@@ -184,6 +184,10 @@ def assign_ids(records: list[FunctionRecord]) -> list[FunctionRecord]:
             item.content_hash,
         ),
     )
-    for index, record in enumerate(sorted_records, start=1):
-        record.function_id = f"fn_{index:06d}"
+    keys = [
+        (record.file, qualified_symbol(record.symbol, record.container), record.content_hash)
+        for record in sorted_records
+    ]
+    for record, function_id in zip(sorted_records, content_ids("fn_", keys), strict=True):
+        record.function_id = function_id
     return sorted_records

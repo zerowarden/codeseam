@@ -16,6 +16,7 @@ from codeseam.semantics import (
     SemanticProject,
     SemanticProvider,
     SemanticProviderRequiredError,
+    SemanticProviderStatus,
     build_semantic_enrichment_requests,
     run_semantic_enrichment,
     unique_semantic_candidates,
@@ -27,6 +28,7 @@ class SemanticStageRuntime:
     provider: SemanticProvider | None = None
     budget: SemanticBudget | None = None
     cache: PersistentCache | None = None
+    unavailable_reason: str = ""
 
 
 class _HasSemanticProjects(Protocol):
@@ -58,19 +60,32 @@ def run_semantic_enrichment_stage(
             mode=mode,
             provider=active_provider,
             budget=runtime.budget if runtime is not None else None,
+            unavailable_reason=runtime.unavailable_reason if runtime is not None else "",
         )
     except SemanticProviderRequiredError as exc:
         raise ConfigError(str(exc)) from exc
 
 
 def semantic_enrichment_stats(run: SemanticEnrichmentRun) -> Json:
+    """Transport (did the worker answer), compiler (could it type-check), coverage."""
+
+    items = [item for result in run.results for item in result.items]
     return {
         "mode": run.mode,
         "status": run.status,
         "request_count": len(run.requests),
         "item_count": sum(len(request.items) for request in run.requests),
         "result_count": len(run.results),
-        "caveats": list(run.caveats),
+        "answered_count": sum(
+            result.status is SemanticProviderStatus.READY for result in run.results
+        ),
+        "compiler_available": any(result.provider.compiler_available for result in run.results),
+        "compiler_versions": sorted(
+            {result.provider.compiler_version for result in run.results} - {""}
+        ),
+        "typechecker_enabled": any(result.provider.typechecker_enabled for result in run.results),
+        "resolved_item_count": sum(item.resolved for item in items),
+        "caveats": list(dict.fromkeys(run.caveats)),
     }
 
 

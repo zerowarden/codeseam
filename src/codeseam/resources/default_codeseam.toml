@@ -21,3 +21,5 @@ split_test = true
 
 [semantics]
 mode = "off"
+# Starting a compiler worker loads tooling from the analysed repository.
+trust_project_code = false

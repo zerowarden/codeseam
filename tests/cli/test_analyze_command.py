@@ -117,7 +117,7 @@ def test_analyze_debug_writes_debug_bundle_only(cli_runner: CliRunner, tmp_path:
     cli_runner(["analyze", "--debug"])
     output_root = tmp_path / ".codeseam" / "reports"
     assert_paths_exist(output_root, ["debug.jsonl.gz"])
-    assert_paths_absent(output_root, ["raw", "context", "normalized", "evidence"])
+    assert_paths_absent(output_root, ["raw", "context"])
 
 
 @pytest.mark.parametrize(
@@ -200,5 +200,5 @@ def test_analyze_json_format_can_write_output_file(
     assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == "1.0"
 
 
-def test_analyze_sarif_format_is_reserved(cli_runner: CliRunner) -> None:
+def test_analyze_rejects_unsupported_sarif_format(cli_runner: CliRunner) -> None:
     cli_runner(["analyze", "--format", "sarif"], expected=CONFIG_ERROR)

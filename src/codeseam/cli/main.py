@@ -20,31 +20,14 @@ from codeseam.cli.exit_codes import (
 )
 from codeseam.cli.models import CliOutput, cli_output
 from codeseam.cli.output import render_cli_output
-from codeseam.cli.spec import ArgumentSpec, CommandSpec, command_specs
+from codeseam.cli.spec import CommandSpec, add_arguments, command_specs
 from codeseam.platform import CodeseamError, ConfigError
-
-
-class CodeseamArgumentParser(argparse.ArgumentParser):
-    pass
-
-
-class ParserError(Exception):
-    pass
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
-    except ParserError as exc:
-        output = cli_output(
-            "parser_error",
-            parser=parser,
-            message=str(exc),
-            exit_code=USER_INPUT_ERROR,
-        )
-        render_cli_output(output)
-        return output.exit_code
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else USER_INPUT_ERROR
     if not hasattr(args, "handler"):
@@ -74,7 +57,7 @@ def _run_handler(args: argparse.Namespace) -> CliOutput:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = CodeseamArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="codeseam",
         description=(
             "Analyze a repository for structural refactor opportunities and write "
@@ -89,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_command(
-    subparsers: argparse._SubParsersAction[CodeseamArgumentParser],
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     name: str,
     spec: CommandSpec,
 ) -> None:
@@ -98,20 +81,13 @@ def _add_command(
         description=str(spec["description"]),
         help=str(spec["help"]),
     )
-    _add_arguments(parser, spec.get("arguments", ()))
+    add_arguments(parser, spec.get("arguments", ()))
     if handler := spec.get("handler"):
         parser.set_defaults(handler=_handler(str(handler)))
     if subcommands := spec.get("subcommands"):
         nested = parser.add_subparsers(dest=str(spec["subcommand_dest"]))
         for child_name, child_spec in cast(dict[str, CommandSpec], subcommands).items():
             _add_command(nested, child_name, child_spec)
-
-
-def _add_arguments(parser: argparse.ArgumentParser, arguments: object) -> None:
-    for spec in cast(tuple[ArgumentSpec, ...], arguments):
-        names = cast(tuple[str, ...], spec["names"])
-        kwargs = {key: value for key, value in spec.items() if key != "names"}
-        parser.add_argument(*names, **kwargs)
 
 
 def _handler(name: str) -> Callable[[argparse.Namespace], CliOutput]:

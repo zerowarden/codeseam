@@ -1,0 +1,264 @@
+# Answer key for the benchmark corpus, written before the tool was first run.
+#
+# expect = "positive": should surface as a refactor target.
+# expect = "negative": looks similar but behaves differently, or is too small to
+#                      be worth sharing; must never be a recommended edit (a
+#                      cautious maintenance note is fine).
+# category:            the clone type, used for per-category recall.
+#
+# What the tool currently achieves lives in baseline.json (tests/benchmark.py).
+#
+# Targets only expose file paths, so a target matches a case when its files are
+# a subset of the case's member files.
+
+[[case]]
+id = "PA"
+category = "type-1"
+kind = "type-1 exact copy"
+expect = "positive"
+members = ["py/ingest/csv_loader.py:normalize_records", "py/export/serializer.py:normalize_records"]
+
+[[case]]
+id = "PB1"
+category = "type-2"
+kind = "type-2 README 'same job, different words'"
+expect = "positive"
+members = ["py/shop/users.py:load_users", "py/shop/products.py:read_products", "py/shop/orders.py:get_orders"]
+
+[[case]]
+id = "PB2"
+category = "type-2"
+kind = "type-2 renamed"
+expect = "positive"
+members = ["py/stats/scores.py:summarize_scores", "py/stats/latency.py:aggregate_latencies"]
+
+[[case]]
+id = "PC1"
+category = "type-3"
+kind = "type-3 added statement"
+expect = "positive"
+members = ["py/config/env_file.py:parse_env_lines", "py/config/properties_file.py:parse_properties_lines"]
+
+[[case]]
+id = "PC2"
+category = "type-3"
+kind = "type-3 removed call"
+expect = "positive"
+members = ["py/users/registration.py:register_user", "py/users/invites.py:accept_invite"]
+
+[[case]]
+id = "PD1"
+category = "type-4"
+kind = "type-4 same behaviour, different syntax"
+expect = "positive"
+members = ["py/util/dedupe.py:unique_in_order", "py/util/ordering.py:ordered_distinct"]
+
+[[case]]
+id = "PD2"
+category = "type-4"
+kind = "type-4 same behaviour, different syntax"
+expect = "positive"
+members = ["py/ledger/aging.py:count_overdue", "py/ledger/reminders.py:overdue_total"]
+
+[[case]]
+id = "PF"
+category = "scattered-rule"
+kind = "README 'same rule, scattered' (reordered guards)"
+expect = "positive"
+members = ["py/rules/checkout.py:can_checkout", "py/rules/discounts.py:can_apply_discount", "py/rules/invoices.py:can_generate_invoice"]
+
+[[case]]
+id = "PE1a"
+category = "negative"
+kind = "operator + vs -"
+expect = "negative"
+members = ["py/ledger/credits.py:apply_credit", "py/ledger/debits.py:apply_debit"]
+
+[[case]]
+id = "PE1b"
+category = "negative"
+kind = "operator > vs <"
+expect = "negative"
+members = ["py/pricing/max_price.py:most_expensive", "py/pricing/min_price.py:cheapest"]
+
+[[case]]
+id = "PE1c"
+category = "negative"
+kind = "operator and vs or"
+expect = "negative"
+members = ["py/users/beta_access.py:can_access_beta", "py/users/preview_access.py:can_access_preview"]
+
+[[case]]
+id = "PE2"
+category = "negative"
+kind = "negation"
+expect = "negative"
+members = ["py/flags/enabled.py:enabled_feature_names", "py/flags/disabled.py:disabled_feature_names"]
+
+[[case]]
+id = "PE3"
+category = "negative"
+kind = "different callee (encrypt vs decrypt)"
+expect = "negative"
+members = ["py/crypto/seal.py:seal_message", "py/crypto/unseal.py:unseal_message"]
+
+[[case]]
+id = "PE4"
+category = "negative"
+kind = "tiny getters, wrappers, constructors"
+expect = "negative"
+members = ["py/models/account.py:*", "py/models/profile.py:*", "py/util/convert.py:*"]
+
+[[case]]
+id = "TA"
+category = "type-1"
+kind = "type-1 exact copy"
+expect = "positive"
+members = ["ts/src/lib/arrays.ts:chunkArray", "ts/src/ui/pagination.ts:chunkArray"]
+
+[[case]]
+id = "TB1"
+category = "type-2"
+kind = "type-2 README analogue"
+expect = "positive"
+members = ["ts/src/api/users.ts:loadUsers", "ts/src/api/products.ts:readProducts", "ts/src/api/orders.ts:getOrders"]
+
+[[case]]
+id = "TB2"
+category = "type-2"
+kind = "type-2 renamed"
+expect = "positive"
+members = ["ts/src/ui/currency.ts:formatCurrency", "ts/src/ui/price.ts:renderPrice"]
+
+[[case]]
+id = "TC"
+category = "type-3"
+kind = "type-3 added guard"
+expect = "positive"
+members = ["ts/src/api/query.ts:buildQueryString", "ts/src/api/search.ts:buildSearchParams"]
+
+[[case]]
+id = "TD"
+category = "type-4"
+kind = "type-4 loop vs reduce"
+expect = "positive"
+members = ["ts/src/lib/sum.ts:totalQuantity", "ts/src/store/cart.ts:cartItemCount"]
+
+[[case]]
+id = "TF"
+category = "scattered-rule"
+kind = "same rule, scattered (reordered guards)"
+expect = "positive"
+members = ["ts/src/rules/checkout.ts:*", "ts/src/rules/discounts.ts:*", "ts/src/rules/invoices.ts:*"]
+
+[[case]]
+id = "TE1a"
+category = "negative"
+kind = "operator + vs -"
+expect = "negative"
+members = ["ts/src/store/deposit.ts:deposit", "ts/src/store/withdraw.ts:withdraw"]
+
+[[case]]
+id = "TE1b"
+category = "negative"
+kind = "operator > vs <"
+expect = "negative"
+members = ["ts/src/lib/latest.ts:latestEvent", "ts/src/lib/earliest.ts:earliestEvent"]
+
+[[case]]
+id = "TE1c"
+category = "negative"
+kind = "operator && vs ||"
+expect = "negative"
+members = ["ts/src/rules/edit_access.ts:canEditDocument", "ts/src/rules/view_access.ts:canViewDocument"]
+
+[[case]]
+id = "TE2"
+category = "negative"
+kind = "negation"
+expect = "negative"
+members = ["ts/src/lib/visible.ts:visibleItemIds", "ts/src/lib/hidden.ts:hiddenItemIds"]
+
+[[case]]
+id = "TE3"
+category = "negative"
+kind = "different callee (put vs delete)"
+expect = "negative"
+members = ["ts/src/api/save.ts:saveRecord", "ts/src/api/remove.ts:removeRecord"]
+
+[[case]]
+id = "TE4"
+category = "negative"
+kind = "tiny getters and wrappers"
+expect = "negative"
+members = ["ts/src/models/member.ts:*", "ts/src/models/team.ts:*", "ts/src/lib/convert.ts:*"]
+
+# Added with M15 (REVIEW.md), from recommended-tier false positives on
+# third-party code, before the fix: exact copies of one-operation bodies, and
+# one-line copies that do encode a rule and are worth sharing.
+
+[[case]]
+id = "PE5"
+category = "negative"
+kind = "hooks that each make one call"
+expect = "negative"
+members = ["py/hooks/lifecycle.py:*"]
+
+[[case]]
+id = "PE6"
+category = "negative"
+kind = "constant-returning protocol methods"
+expect = "negative"
+members = ["py/io/null_stream.py:*", "py/io/closed_stream.py:*"]
+
+[[case]]
+id = "PG1"
+category = "type-1"
+kind = "type-1 one-line normalization rule"
+expect = "positive"
+members = ["py/text/report_lines.py:report_single_line", "py/text/log_lines.py:log_single_line"]
+
+[[case]]
+id = "TE5"
+category = "negative"
+kind = "logger wrappers that each make one call"
+expect = "negative"
+members = ["ts/src/lib/logger.ts:*"]
+
+[[case]]
+id = "TE6"
+category = "negative"
+kind = "constant-returning methods"
+expect = "negative"
+members = ["ts/src/cache/null-cache.ts:*", "ts/src/cache/disabled-cache.ts:*"]
+
+[[case]]
+id = "TG1"
+category = "type-1"
+kind = "type-1 one-line error-name rule"
+expect = "positive"
+members = ["ts/src/errors/request.ts:requestErrorName", "ts/src/errors/worker.ts:workerErrorName"]
+
+# Added with M2b (REVIEW.md): a block copied into otherwise different
+# functions, and a prologue too short to be worth a helper.
+
+[[case]]
+id = "PH1"
+category = "partial"
+kind = "partial clone: shared validation and settings block"
+expect = "positive"
+members = ["py/jobs/import_job.py:run_import", "py/jobs/export_job.py:run_export"]
+
+[[case]]
+id = "PH2"
+category = "negative"
+kind = "shared two-statement logging prologue"
+expect = "negative"
+members = ["py/jobs/cleanup_job.py:*"]
+
+[[case]]
+id = "TH1"
+category = "partial"
+kind = "partial clone: shared validation and settings block"
+expect = "positive"
+members = ["ts/src/jobs/import-job.ts:runImport", "ts/src/jobs/export-job.ts:runExport"]

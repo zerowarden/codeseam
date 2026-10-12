@@ -3,20 +3,22 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from math import isqrt
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from codeseam.analysis import (
     TREE_EDIT_POLICY,
+    ActionKind,
     AdapterId,
-    CachedRelationSummary,
     DataflowGraph,
     LanguageFamily,
     MemberFeatureCache,
     MemberFeatures,
     OrderedTree,
+    RelationKind,
     RelationMember,
     RelationPair,
     SignatureAnalysis,
@@ -36,7 +38,8 @@ from codeseam.cache import relation_cache as relation_pair_cache
 
 EXPECTED_TREE_SIMILARITY = 0.5
 EXPECTED_TREE_NODE_COUNT = 2
-EXPECTED_TREE_EDIT_BUDGET_OVERFLOW = 2
+MANY_TREE_PAIRS = 12
+OVER_EDIT_PRODUCT_LIMIT = isqrt(TREE_EDIT_POLICY.edit_product_limit) + 1
 INVALID_CACHE_VALUES = (None, b"not-a-cache-blob", {"result": "unknown"}, "bad")
 
 
@@ -86,8 +89,8 @@ def test_tree_comparison_skips_edit_distance_when_product_limit_is_exceeded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     distance_calls = _patch_tree_distance(monkeypatch, lambda _left, _right: 1)
-    left_tree = _wide_tree(150)
-    right_tree = _wide_tree(150)
+    left_tree = _wide_tree(OVER_EDIT_PRODUCT_LIMIT)
+    right_tree = _wide_tree(OVER_EDIT_PRODUCT_LIMIT)
     left = _features("fn_left", body_tree=left_tree, body_shape="module left", body_hash="")
     right = _features("fn_right", body_tree=right_tree, body_shape="module right", body_hash="")
 
@@ -220,81 +223,38 @@ def test_member_digest_includes_semantic_roles() -> None:
     )
 
 
-def test_relation_pair_group_cache_stores_compact_summaries() -> None:
-    left = _member("fn_left")
-    right = _member("fn_right")
-    cache = MemberFeatureCache([left, right])
-    left_features = cache.get(left)
-    right_features = cache.get(right)
-    pair = pairs.relation_pair_from_features(
-        left_features,
-        right_features,
-        action_builder=pair_actions,
-    )
-    assert pair is not None
-
-    value = relation_pair_cache.relation_pair_group_cache_value([pair])
-    summaries = value["pairs"]
-
-    assert isinstance(summaries, tuple)
-    assert isinstance(summaries[0], CachedRelationSummary)
-    assert not isinstance(summaries[0], RelationPair)
-
-    cached, restored = relation_pair_cache.relation_pairs_from_group_cache_value(
-        value,
-        {
-            relation_pair_cache.relation_pair_ref_cache_key(pair.left, pair.right): (
-                left_features,
-                right_features,
+def test_relation_pair_cache_hit_returns_the_complete_cold_result(tmp_path: Path) -> None:
+    left = _member("fn_left", statements=("ASSIGN:Assign", "RETURN:ARG0"))
+    right = _member("fn_right", statements=("ASSIGN:Assign", "RETURN:ARG0"))
+    cache = persistent_cache(tmp_path / ".cache" / "codeseam", enabled=True)
+    try:
+        caches = AnalysisCacheContext(
+            persistent=cache,
+            file_analysis_enabled=True,
+            relation_pair_enabled=True,
+            language=LanguageRunCache(),
+        )
+        runs = [
+            relation_pair_cache.cached_relation_pairs(
+                [(left, right)],
+                action_builder=pair_actions,
+                feature_cache=MemberFeatureCache([left, right]),
+                stats={},
+                caches=caches,
             )
-        },
-    )
-    assert cached is True
-    assert restored[0].relation_kind == pair.relation_kind
-    assert restored[0].scores.relatedness == pair.scores.relatedness
+            for _ in range(2)
+        ]
+    finally:
+        cache.close()
 
-
-def test_relation_pair_group_cache_handles_legacy_summary_slots() -> None:
-    left = _member("fn_left")
-    right = _member("fn_right")
-    cache = MemberFeatureCache([left, right])
-    left_features = cache.get(left)
-    right_features = cache.get(right)
-    pair = pairs.relation_pair_from_features(
-        left_features,
-        right_features,
-        action_builder=pair_actions,
-    )
-    assert pair is not None
-    value = relation_pair_cache.relation_pair_group_cache_value([pair])
-    summaries = cast(tuple[CachedRelationSummary, ...], value["pairs"])
-    summary = summaries[0]
-    legacy_summary = replace(
-        summary,
-        min_body_line_count=cast(Any, pair.refactor_action_candidates),
-    )
-
-    cached, restored = relation_pair_cache.relation_pairs_from_group_cache_value(
-        {**value, "pairs": (legacy_summary,)},
-        {
-            relation_pair_cache.relation_pair_ref_cache_key(pair.left, pair.right): (
-                left_features,
-                right_features,
-            )
-        },
-    )
-
-    assert cached is True
-    assert restored[0].min_body_line_count == min(
-        left_features.body_line_count,
-        right_features.body_line_count,
-    )
+    cold, warm = runs
+    assert len(cold) == 1
+    assert warm == cold
 
 
 @pytest.mark.parametrize("cached", INVALID_CACHE_VALUES)
 def test_relation_pair_cache_rejects_invalid_values(cached: object) -> None:
     assert relation_pair_cache.relation_pair_from_cache_value(cached) == (False, None)
-    assert relation_pair_cache.relation_pairs_from_group_cache_value(cached, {}) == (False, ())
 
 
 def test_tree_comparison_cache_value_round_trips() -> None:
@@ -308,7 +268,7 @@ def test_tree_comparison_cache_value_round_trips() -> None:
     assert restored == tree
 
 
-def test_tree_edit_decision_skips_when_cheap_evidence_is_sufficient() -> None:
+def test_tree_edit_decision_measures_every_pair_within_the_size_limit() -> None:
     left = _member("fn_left", statements=("CALL:a", "RETURN:x"))
     right = _member("fn_right", statements=("CALL:b", "RETURN:y"))
     cache = MemberFeatureCache([left, right])
@@ -320,14 +280,13 @@ def test_tree_edit_decision_skips_when_cheap_evidence_is_sufficient() -> None:
         has_argument_normalization=False,
     )
 
-    assert decision.compare_edit_distance is False
-    assert decision.reject is False
-    assert decision.tree_distance_source == "tree_edit_skipped_cheap_evidence_sufficient"
+    assert decision.compare_edit_distance is True
+    assert decision.tree_distance_source == similarity.ORDERED_TREE_EDIT_SOURCE
 
 
 def test_tree_edit_decision_skips_when_edit_product_limit_is_exceeded() -> None:
-    left = _features("fn_left", body_tree=_wide_tree(150))
-    right = _features("fn_right", body_tree=_wide_tree(150))
+    left = _features("fn_left", body_tree=_wide_tree(OVER_EDIT_PRODUCT_LIMIT))
+    right = _features("fn_right", body_tree=_wide_tree(OVER_EDIT_PRODUCT_LIMIT))
 
     decision = pairs.tree_edit_decision(
         left,
@@ -389,14 +348,16 @@ def test_name_similarity_gate(monkeypatch: pytest.MonkeyPatch, case: NameSimilar
         assert calls == [(case.left, case.right)]
 
 
-def test_relation_pair_tree_edit_uses_cluster_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_every_pair_with_trees_gets_a_measured_tree_comparison(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     distance_calls = _patch_tree_distance(
         monkeypatch,
         lambda left, right: 0 if left.label == right.label else 1,
     )
     stats: dict[str, int] = {}
 
-    for index in range(TREE_EDIT_POLICY.cluster_budget + EXPECTED_TREE_EDIT_BUDGET_OVERFLOW):
+    for index in range(MANY_TREE_PAIRS):
         left = _features(
             f"fn_left_{index}",
             symbol="shared",
@@ -418,10 +379,85 @@ def test_relation_pair_tree_edit_uses_cluster_budget(monkeypatch: pytest.MonkeyP
         )
 
         assert pair is not None
+        assert pair.tree.tree_distance_source == similarity.ORDERED_TREE_EDIT_SOURCE
 
-    assert distance_calls() == TREE_EDIT_POLICY.cluster_budget
-    assert stats["tree_edit_requested_count"] == TREE_EDIT_POLICY.cluster_budget
-    assert stats["tree_edit_budget_exhausted_count"] == EXPECTED_TREE_EDIT_BUDGET_OVERFLOW
+    assert distance_calls() == MANY_TREE_PAIRS
+    assert stats["tree_edit_requested_count"] == MANY_TREE_PAIRS
+
+
+def test_reordered_statements_are_their_own_relation() -> None:
+    tokens = ("IF", "IF", "RETURN:")
+    left, right = (
+        replace(_features(function_id, statements=tokens), statement_keys=keys)
+        for function_id, keys in (("fn_left", ("a", "b", "r")), ("fn_right", ("b", "a", "r")))
+    )
+
+    pair = _score(left, right)
+
+    assert pair.relation_kind is RelationKind.SAME_STATEMENTS_DIFFERENT_ORDER
+    assert pair.anti_unification.hole_count == 0
+    assert {action.kind for action in pair.refactor_action_candidates} >= {
+        ActionKind.RECORD_SHARED_CONCERN
+    }
+
+
+def _same_skeleton_pair(body_tree: OrderedTree | None) -> tuple[MemberFeatures, MemberFeatures]:
+    statements = ("ASSIGN:Assign", "ASSIGN:Assign", "RETURN:")
+    left, right = (
+        replace(
+            _features(function_id, body_tree=body_tree, statements=statements),
+            calls=(callee,),
+            call_counts=Counter({callee: 1}),
+        )
+        for function_id, callee in (("fn_left", "lookup_rate"), ("fn_right", "fetch_rate"))
+    )
+    return left, right
+
+
+def _score(left: MemberFeatures, right: MemberFeatures) -> RelationPair:
+    pair = pairs.relation_pair_from_features(left, right, action_builder=pair_actions, stats={})
+    assert pair is not None
+    return pair
+
+
+def test_relation_pair_without_body_trees_never_claims_exact_structure() -> None:
+    pair = _score(*_same_skeleton_pair(body_tree=None))
+
+    assert pair.tree.tree_distance_source not in similarity.EXACT_TREE_SOURCES
+    assert not pair.flags.same_tree
+
+
+def test_relation_pair_with_body_trees_is_measured() -> None:
+    pair = _score(*_same_skeleton_pair(body_tree=OrderedTree("Module", (OrderedTree("Return"),))))
+
+    assert pair.tree.tree_distance_source == similarity.ORDERED_TREE_EDIT_SOURCE
+    assert pair.tree.tree_edit_distance == 0
+    assert pair.flags.same_tree
+
+
+def test_tree_proxies_are_not_cached_as_comparisons(tmp_path: Path) -> None:
+    left = _member("fn_left", statements=("ASSIGN:Assign", "RETURN:"))
+    right = _member("fn_right", statements=("ASSIGN:Assign", "RETURN:"))
+    cache = persistent_cache(tmp_path / ".cache" / "codeseam", enabled=True)
+    try:
+        caches = AnalysisCacheContext(
+            persistent=cache,
+            file_analysis_enabled=True,
+            relation_pair_enabled=True,
+            language=LanguageRunCache(),
+        )
+        stats: dict[str, int] = {}
+        relation_pair_cache.cached_relation_pairs(
+            [(left, right)],
+            action_builder=pair_actions,
+            feature_cache=MemberFeatureCache([left, right]),
+            stats=stats,
+            caches=caches,
+        )
+    finally:
+        cache.close()
+
+    assert "tree_comparison_cache_miss_count" not in stats
 
 
 def _member(  # noqa: PLR0913
@@ -503,13 +539,10 @@ def _features(  # noqa: PLR0913
         normalized_name=symbol or function_id,
         role="function",
         statements=statements,
-        statement_fingerprint=hash(statements),
         calls=(),
-        call_set=frozenset(),
         call_fingerprints=(),
         call_counts=Counter(),
         parameter_default_roles={},
-        parameter_vectors={},
         local_dataflow_graph=DataflowGraph(),
         graph_features=frozenset(),
         literal_shapes=frozenset(),
@@ -543,7 +576,7 @@ def _patch_tree_distance(
         calls += 1
         return distance(left, right)
 
-    monkeypatch.setattr(similarity, "ordered_tree_edit_distance", fake_distance)
+    monkeypatch.setattr(similarity, "body_tree_edit_distance", fake_distance)
     return lambda: calls
 
 

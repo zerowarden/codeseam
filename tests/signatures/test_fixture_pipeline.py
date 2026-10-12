@@ -33,7 +33,9 @@ def test_signature_artifacts_skip_python_ast_parse_on_warm_cache(
     def fail_parse(path: Path) -> object:
         raise AssertionError(f"unexpected Python AST parse for unchanged file: {path}")
 
-    monkeypatch.setattr("codeseam.adapters.languages.python.adapter.parse_python", fail_parse)
+    monkeypatch.setattr(
+        "codeseam.adapters.languages.python.adapter.parse_python_source", fail_parse
+    )
     monkeypatch.setattr("codeseam.adapters.languages.python.signatures.parse_python", fail_parse)
 
     second_cache = cache_factory()

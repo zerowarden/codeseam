@@ -11,11 +11,12 @@ from codeseam.analysis.relations.member_model import (
     RelationMember,
     member_ref,
 )
+from codeseam.analysis.relations.tree_distance import tree_shape
 from codeseam.analysis.signatures import (
     CallFingerprint,
     DataflowGraph,
     OrderedTree,
-    ParameterUseVector,
+    ordered_tree_size,
 )
 
 type ErrorShape = tuple[tuple[str, ...], int, int]
@@ -32,13 +33,10 @@ class MemberFeatures:
     normalized_name: str
     role: str
     statements: tuple[str, ...]
-    statement_fingerprint: int
     calls: tuple[str, ...]
-    call_set: frozenset[str]
     call_fingerprints: tuple[CallFingerprint, ...]
     call_counts: Counter[str]
     parameter_default_roles: dict[str, str]
-    parameter_vectors: dict[str, ParameterUseVector]
     local_dataflow_graph: DataflowGraph
     graph_features: frozenset[str]
     literal_shapes: frozenset[str]
@@ -51,10 +49,51 @@ class MemberFeatures:
     return_signature: tuple[str, ...]
     error_shape: ErrorShape
     body_line_count: int
+    statement_keys: tuple[str, ...] = ()
 
     @cached_property
     def body_tree(self) -> OrderedTree | None:
         return self.body_tree_payload
+
+    @cached_property
+    def body_tree_size(self) -> int:
+        return ordered_tree_size(self.body_tree) if self.body_tree else 0
+
+    @cached_property
+    def body_skeleton(self) -> tuple[tuple[int, ...], ...]:
+        """Statement shapes in any order: equal when bodies differ only in labels."""
+
+        return (
+            tuple(sorted(tree_shape(item) for item in self.body_tree.children))
+            if self.body_tree
+            else ()
+        )
+
+    @cached_property
+    def body_operators(self) -> tuple[str, ...]:
+        """Operator leaves (`op:+`, `op:Not`) of the body tree, sorted."""
+
+        if not self.body_tree:
+            return ()
+        operators: list[str] = []
+        stack = [self.body_tree]
+        while stack:
+            node = stack.pop()
+            if node.label.startswith("op:"):
+                operators.append(node.label)
+            stack.extend(node.children)
+        return tuple(sorted(operators))
+
+    @cached_property
+    def aligned_statements(self) -> tuple[str, ...]:
+        """Statements as compared: content keys when the adapter supplied them.
+
+        Coarse tokens (`ASSIGN:Assign`) match any statement of the same kind, so
+        alignment uses them only for features built without keys.
+        """
+
+        keys = self.statement_keys
+        return keys if keys and len(keys) == len(self.statements) else self.statements
 
     @cached_property
     def ref(self) -> MemberRef:

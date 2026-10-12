@@ -3,8 +3,6 @@ from __future__ import annotations
 from codeseam.analysis import ReviewTier
 from codeseam.cli.constants import REVIEW_TIER_LABELS
 from codeseam.cli.repository_summary import repository_summary_lines
-from codeseam.output.serializers.ci import CI_ARTIFACT_PATHS
-from codeseam.output.serializers.finding_buckets import is_review_surface_target
 from codeseam.output.serializers.review import targets_with_review_tiers
 from codeseam.output.serializers.titles import (
     display_action_title,
@@ -19,6 +17,7 @@ from codeseam.platform import (
     plural_noun,
     plural_suffix,
     single_line,
+    text_list,
 )
 
 CI_TOP_REVIEW_TARGET_LIMIT = 5
@@ -56,7 +55,7 @@ def render_ci_summary(payload: Json, targets: object = None) -> str:
         [
             "",
             "Artifacts:",
-            *[f"- {path}" for path in CI_ARTIFACT_PATHS],
+            *[f"- {path}" for path in text_list(payload.get("artifacts"))],
             "",
         ]
     )
@@ -130,7 +129,7 @@ def _surface_targets(targets: object) -> list[Json]:
     review_targets = [
         target
         for target in targets_with_review_tiers(targets, {ReviewTier.RECOMMENDED_EDIT})
-        if target.get("summary_eligible") is True and is_review_surface_target(target)
+        if target.get("summary_eligible") is True
     ]
     return sorted(review_targets, key=_target_key)
 

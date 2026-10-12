@@ -9,7 +9,6 @@ from codeseam.analysis import (
     ActionStatus,
     AssessmentBand,
     AssessmentGate,
-    AssessmentPolicy,
     DetectionConfidence,
     EvidenceQuality,
     EvidenceSummary,
@@ -26,7 +25,7 @@ from codeseam.analysis import (
 )
 from codeseam.config import load_config
 
-POLICY = AssessmentPolicy.from_config(load_config(Path("/repo")).data)
+POLICY = load_config(Path("/repo")).assessment
 LOW_DETECTION = 0.0
 HIGH_DETECTION = 0.95
 HIGH_FIT = 0.90
@@ -125,7 +124,7 @@ def test_failed_clone_safety_falls_back_to_do_not_refactor() -> None:
 def test_failed_abstraction_introduction_falls_back_to_shared_concern() -> None:
     action = _recommend(
         ActionKind.INTRODUCE_ABSTRACTION,
-        metrics=_introduce_abstraction_metrics(max_hole_size=LARGE_HOLE_SIZE),
+        metrics=_introduce_abstraction_metrics(lead_hole_size=LARGE_HOLE_SIZE),
     )
 
     assert action.action_kind is ActionKind.RECORD_SHARED_CONCERN
@@ -176,7 +175,7 @@ def test_reuse_existing_helper_survives_low_payoff_for_review() -> None:
             member_count=2,
             structural_relation_pair_count=1,
             same_role_relation_count=1,
-            max_relation_confidence_score=0.72,
+            lead_confidence_score=0.72,
         ),
         payoff_score=LOW_PAYOFF,
         risk_score=0.45,
@@ -211,7 +210,7 @@ def test_mixed_role_structural_duplicate_is_not_considered_safe() -> None:
             member_count=2,
             structural_duplicate_pair_count=1,
             body_hash_match_count=1,
-            max_tree_similarity=1.0,
+            lead_tree_similarity=1.0,
             same_role_relation_count=0,
         ),
     )
@@ -285,18 +284,18 @@ def _clean_clone_metrics() -> FindingMetrics:
         member_count=2,
         structural_relation_pair_count=1,
         body_hash_match_count=1,
-        max_tree_similarity=1.0,
+        lead_tree_similarity=1.0,
         relation_kind_counts={RelationKind.BODY_IDENTICAL.value: 1},
         same_role_relation_count=1,
     )
 
 
-def _introduce_abstraction_metrics(*, max_hole_size: int = 0) -> FindingMetrics:
+def _introduce_abstraction_metrics(*, lead_hole_size: int = 0) -> FindingMetrics:
     return FindingMetrics(
         member_count=2,
         structural_relation_pair_count=1,
-        max_stable_statement_count=2,
-        max_hole_count=0,
-        max_hole_size=max_hole_size,
+        lead_stable_statement_count=2,
+        lead_hole_count=0,
+        lead_hole_size=lead_hole_size,
         same_role_relation_count=1,
     )

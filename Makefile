@@ -1,4 +1,4 @@
-.PHONY: check test test\:cov lint format typecheck analyze profile profile-clusters
+.PHONY: check test test\:cov lint format typecheck deadcode analyze profile bench
 
 PYTHON_TOOL_ENV = PYTHONPYCACHEPREFIX=.cache/pycache
 
@@ -28,3 +28,7 @@ analyze:
 
 profile:
 	$(PYTHON_TOOL_ENV) uv run codeseam profile $(PROFILE_ARGS)
+
+# Score the labelled corpus; BENCH_ARGS=--update accepts the scores as the new baseline.
+bench:
+	$(PYTHON_TOOL_ENV) uv run python tests/benchmark.py $(BENCH_ARGS)

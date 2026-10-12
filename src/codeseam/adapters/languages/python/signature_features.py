@@ -1,36 +1,77 @@
 from __future__ import annotations
 
 import ast
-import zlib
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from hashlib import blake2b
 from typing import cast
 
 from codeseam.analysis import (
-    CalleeShape,
-    CallFingerprint,
-    DataflowEdge,
-    DataflowGraph,
-    DataflowNode,
+    DEFAULT_EXPRESSION,
+    NORMALIZATION_TRANSFORM_METHODS,
+    AssignKind,
+    ControlKind,
     ExpressionShape,
-    ParameterUseVector,
+    OrderedTree,
+    StatementKind,
+    assign_token,
+    statement_token,
 )
+from codeseam.analysis.signatures import MAX_TREE_DEPTH
 from codeseam.analysis.signatures.model import OperationCompact, OperationFeatures, OperationFlow
 from codeseam.platform import cached_identifier_tokens
 
 type _CollectResult = tuple[int, int]
 type _CalleeParts = tuple[tuple[str, ...], tuple[str, ...], str, str, tuple[str, ...]]
 
-BRANCH_NODES = (ast.If, ast.IfExp, ast.Match, ast.Try, ast.ExceptHandler, ast.BoolOp)
+# ECMAScript counterparts are in `ecmascript/syntax_kinds.py`; keep the two in step.
+BRANCH_NODES = (ast.If, ast.IfExp, ast.match_case, ast.ExceptHandler)
 LOOP_NODES = (ast.For, ast.AsyncFor, ast.While, ast.comprehension)
-NESTING_NODES = BRANCH_NODES + LOOP_NODES + (ast.With, ast.AsyncWith)
+NESTING_NODES = (
+    ast.If,
+    ast.Match,
+    ast.Try,
+    ast.TryStar,
+    ast.With,
+    ast.AsyncWith,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+)
 BRANCH_NODE_TYPES = frozenset(BRANCH_NODES)
 LOOP_NODE_TYPES = frozenset(LOOP_NODES)
 NESTING_NODE_TYPES = frozenset(NESTING_NODES)
-CONTROL_LOOP_NODE_TYPES = frozenset((ast.For, ast.AsyncFor, ast.While))
-CONTROL_BRANCH_NODE_TYPES = frozenset((ast.If, ast.Match))
-NORMALIZATION_TRANSFORM_METHODS = frozenset({"decode", "encode"})
-STRUCTURE_HASH_OFFSET = 0
+CONTROL_KINDS: dict[type[ast.AST], ControlKind] = {
+    ast.If: ControlKind.BRANCH,
+    ast.Match: ControlKind.BRANCH,
+    ast.For: ControlKind.LOOP,
+    ast.AsyncFor: ControlKind.LOOP,
+    ast.While: ControlKind.LOOP,
+    ast.Try: ControlKind.TRY,
+    ast.TryStar: ControlKind.TRY,
+    ast.ExceptHandler: ControlKind.CATCH,
+    ast.With: ControlKind.WITH,
+    ast.AsyncWith: ControlKind.WITH,
+    ast.Await: ControlKind.AWAIT,
+}
+BINDING_NODE_TYPES = frozenset(
+    (
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+        ast.ExceptHandler,
+        ast.MatchAs,
+        ast.MatchStar,
+        ast.MatchMapping,
+        ast.Import,
+        ast.ImportFrom,
+        ast.Global,
+        ast.Nonlocal,
+    )
+)
+STATEMENT_KEY_BYTES = 8
+OPERATOR_NODE_TYPES = (ast.operator, ast.boolop, ast.cmpop, ast.unaryop)
+CONSTANT_LABEL_LIMIT = 48
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,19 +88,10 @@ class _CallFacts:
     callee_name: str
 
 
-@dataclass(slots=True)
-class _MutableParameterUse:
-    access_paths: list[str] = field(default_factory=list)
-    receiver_of_calls: list[str] = field(default_factory=list)
-    passed_as_argument_to: list[str] = field(default_factory=list)
-    returned: bool = False
-
-
 def operation_features(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     *,
     include_relation_detail: bool = False,
-    include_flow: bool = False,
 ) -> OperationFeatures:
     """Extract Python function features in two cost tiers.
 
@@ -71,13 +103,12 @@ def operation_features(
     args = _arg_roles(node.args)
     context = _FeatureContext.from_function(node, args)
     sequence = _statement_sequence(node, context)
-    needs_call_facts = include_relation_detail or include_flow
     call_facts = (
-        tuple(context.call_facts(call) for call in context.calls) if needs_call_facts else ()
+        tuple(context.call_facts(call) for call in context.calls) if include_relation_detail else ()
     )
     call_tokens = (
         tuple(facts.token for facts in call_facts)
-        if needs_call_facts
+        if include_relation_detail
         else tuple(context.call_token(call) for call in context.calls)
     )
     defaults = _parameter_defaults(node.args, args)
@@ -101,28 +132,17 @@ def operation_features(
             body_shape=context.body_shape,
             body_shape_hash=context.body_shape_hash,
             body_tree_node_count=context.body_tree_node_count,
+            statement_keys=context.statement_keys,
+            statement_spans=tuple(
+                (stmt.lineno, stmt.end_lineno or stmt.lineno) for stmt in node.body
+            ),
+            body_tree=_body_tree(node, context.name_roles) if include_relation_detail else None,
             branch_count=context.branch_count,
             loop_count=context.loop_count,
             return_count=context.return_count,
             max_nesting=context.max_nesting,
         ),
-        flow=(
-            OperationFlow(
-                call_fingerprints=tuple(context.call_fingerprint(call) for call in context.calls),
-                parameter_use_vectors=tuple(
-                    sorted(_parameter_use_vectors(context, call_facts).items())
-                ),
-                parameter_default_roles=tuple(sorted(defaults.items())),
-                local_dataflow_graph=_local_dataflow_graph(node, context, sequence),
-            )
-            if include_flow
-            else OperationFlow(
-                call_fingerprints=(),
-                parameter_use_vectors=(),
-                parameter_default_roles=tuple(sorted(defaults.items())),
-                local_dataflow_graph=DataflowGraph(),
-            )
-        ),
+        flow=OperationFlow(parameter_default_roles=tuple(sorted(defaults.items()))),
     )
 
 
@@ -166,6 +186,8 @@ class _FeatureContext:
     body_shape: str
     body_shape_hash: str
     body_tree_node_count: int
+    statement_keys: tuple[str, ...]
+    name_roles: dict[str, str]
     branch_count: int
     loop_count: int
     return_count: int
@@ -174,7 +196,6 @@ class _FeatureContext:
     _load_reads: dict[int, set[str]] = field(default_factory=dict)
     _call_tokens: dict[int, str] = field(default_factory=dict)
     _call_facts: dict[int, _CallFacts] = field(default_factory=dict)
-    _call_fingerprints: dict[int, CallFingerprint] = field(default_factory=dict)
 
     @classmethod
     def from_function(
@@ -194,6 +215,8 @@ class _FeatureContext:
             body_shape="",
             body_shape_hash=body_shape_hash,
             body_tree_node_count=body_tree_node_count,
+            statement_keys=collector.statement_keys(),
+            name_roles=collector.name_roles(),
             branch_count=collector.branch_count,
             loop_count=collector.loop_count,
             return_count=collector.return_count,
@@ -225,14 +248,6 @@ class _FeatureContext:
             self._call_tokens[key] = facts.token
         return facts
 
-    def call_fingerprint(self, call: ast.Call) -> CallFingerprint:
-        key = id(call)
-        fingerprint = self._call_fingerprints.get(key)
-        if fingerprint is None:
-            fingerprint = _call_fingerprint(self.call_facts(call))
-            self._call_fingerprints[key] = fingerprint
-        return fingerprint
-
     def call_token(self, call: ast.Call) -> str:
         key = id(call)
         token = self._call_tokens.get(key)
@@ -240,6 +255,24 @@ class _FeatureContext:
             token = _call_token_for_call(call, self)
             self._call_tokens[key] = token
         return token
+
+
+@dataclass(frozen=True, slots=True)
+class _Visit:
+    value: object
+    depth: int
+
+
+@dataclass(frozen=True, slots=True)
+class _Exit:
+    node: ast.AST | None  # None for a field list, which records nothing
+    child_count: int
+    base_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _CalleeSlot:
+    pass
 
 
 @dataclass(slots=True)
@@ -266,7 +299,13 @@ class _FunctionCollector:
     loop_count: int = 0
     return_count: int = 0
     max_nesting: int = 0
-    structure_hash: int = STRUCTURE_HASH_OFFSET
+    shape_tokens: list[str] = field(default_factory=list)
+    name_slots: list[tuple[int, str]] = field(default_factory=list)
+    bound_names: set[str] = field(default_factory=set)
+    outer_names: set[str] = field(default_factory=set)
+    statement_spans: list[tuple[int, int]] = field(default_factory=list)
+    literal_slots: list[int] = field(default_factory=list)
+    callee_slots: set[int] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.arg_masks = _arg_masks(self.args)
@@ -275,6 +314,7 @@ class _FunctionCollector:
         self,
         node: ast.FunctionDef | ast.AsyncFunctionDef,
     ) -> tuple[str, int]:
+        self.bound_names.add(node.name)  # renamed recursive clones still match
         body_node_count = 1
         for child in node.body:
             previous_loads = self.current_statement_loads
@@ -283,79 +323,157 @@ class _FunctionCollector:
             # allocating and unioning a set for every AST node in the subtree.
             statement_loads: set[str] = set()
             self.current_statement_loads = statement_loads
+            start = len(self.shape_tokens)
             try:
                 item = self.collect(child)
             finally:
                 self.current_statement_loads = previous_loads
+            self.statement_spans.append((start, len(self.shape_tokens)))
             self.load_reads[id(child)] = statement_loads
             body_node_count += item[1]
-        return _format_shape_hash(self.structure_hash), body_node_count
+        return self._shape_hash(), body_node_count
+
+    def name_roles(self) -> dict[str, str]:
+        """Parameter role, LOCALn in order of first use, or FREE:name for each name."""
+
+        local_names = self.bound_names - self.outer_names
+        roles: dict[str, str] = {}
+        local_count = 0
+        for _, name in self.name_slots:
+            if name in roles:
+                continue
+            if role := self.args.get(name):
+                roles[name] = role
+            elif name in local_names:
+                roles[name] = f"LOCAL{local_count}"
+                local_count += 1
+            else:
+                roles[name] = f"FREE:{name}"
+        return roles
+
+    def statement_keys(self) -> tuple[str, ...]:
+        """Type-2 digest per top-level statement, once `_shape_hash` resolved names.
+
+        Literal values and free names outside call position are abstracted, so
+        statements that differ only in data (`User` vs `Order`, `"users"` vs
+        `"orders"`) align; structure, operators, attributes and callees still
+        tell statements apart. Exact values stay in the body hash and tree.
+        """
+
+        tokens = self.shape_tokens
+        abstract = set(self.literal_slots) | {
+            index
+            for index, _ in self.name_slots
+            if index not in self.callee_slots and tokens[index].startswith("FREE:")
+        }
+        return tuple(
+            blake2b(
+                "\x1f".join(
+                    "_" if index in abstract else tokens[index] for index in range(start, end)
+                ).encode("utf-8", "surrogatepass"),
+                digest_size=STATEMENT_KEY_BYTES,
+            ).hexdigest()
+            for start, end in self.statement_spans
+        )
+
+    def _shape_hash(self) -> str:
+        """Hash shape tokens once every binding in the function is known.
+
+        Parameters and locals are renamed consistently so renamed clones still
+        hash together; free names (callees, modules, builtins) keep their
+        identity so `read_json(x)` and `delete_all(x)` do not. Roles are resolved
+        here because the walk can meet a use before its binding (comprehension
+        elements precede their targets).
+        """
+        roles = self.name_roles()
+        for index, name in self.name_slots:
+            self.shape_tokens[index] = roles[name]
+        # The separator keeps token boundaries unambiguous ("ab"+"c" != "a"+"bc").
+        payload = "\x1f".join(self.shape_tokens).encode("utf-8", "surrogatepass")
+        return f"shape128:{blake2b(payload, digest_size=16).hexdigest()}"
 
     def collect(self, value: object, depth: int = 0) -> _CollectResult:
+        """Walk one subtree iteratively; nesting depth is unbounded in real code.
+
+        Shape tokens are emitted in pre-order and each node's arg-read mask and
+        node count are aggregated in post-order, exactly as a recursive walk would.
+        """
+
+        results: list[_CollectResult] = []
+        work: list[_Visit | _Exit | _CalleeSlot] = [_Visit(value, depth)]
+        while work:
+            step = work.pop()
+            if type(step) is _CalleeSlot:
+                self.callee_slots.add(len(self.shape_tokens) + 1)  # the next Name's slot
+            elif type(step) is _Exit:
+                exit_step = step
+                children = results[len(results) - exit_step.child_count :]
+                del results[len(results) - exit_step.child_count :]
+                mask, count = 0, exit_step.base_count
+                for child_mask, child_count in children:
+                    mask |= child_mask
+                    count += child_count
+                if exit_step.node is not None:
+                    self._record(exit_step.node, mask, count)
+                results.append((mask, count))
+            else:
+                visit = cast(_Visit, step)
+                if (leaf := self._leaf(visit.value)) is not None:
+                    results.append(leaf)
+                else:
+                    work.extend(self._expand(visit.value, visit.depth))
+        return results[-1]
+
+    def _leaf(self, value: object) -> _CollectResult | None:
         value_type = type(value)
         if value_type is ast.Name:
-            name: ast.Name = value  # type: ignore[assignment]
-            return self._name(name)
-        if value_type is ast.arg:
-            arg: ast.arg = value  # type: ignore[assignment]
-            return self._arg(arg)
+            return self._name(cast(ast.Name, value))
         if value_type is ast.Constant:
-            constant: ast.Constant = value  # type: ignore[assignment]
+            constant = cast(ast.Constant, value)
             self._add_shape_token_triple(
                 "Constant",
                 type(constant.value).__name__,
                 repr(constant.value),
             )
-            return self._record(
-                constant,
-                0,
-                1,
-            )
-        if isinstance(value, ast.AST):
-            next_depth = self._record_node(value, depth)
-            arg_read_mask = 0
-            node_count = 1
-            for _, item in ast.iter_fields(value):
-                child_mask, child_count = self.collect(item, next_depth)
-                arg_read_mask |= child_mask
-                node_count += child_count
-            return self._record(value, arg_read_mask, node_count)
-        if isinstance(value, list):
-            arg_read_mask = 0
-            node_count = 0
-            for item in value:
-                child_mask, child_count = self.collect(item, depth)
-                arg_read_mask |= child_mask
-                node_count += child_count
-            return arg_read_mask, node_count
+            self.literal_slots.append(len(self.shape_tokens) - 1)
+            return self._record(constant, 0, 1)
+        if value_type is ast.arg or isinstance(value, ast.AST | list):
+            return None
         return 0, 0
+
+    def _expand(self, value: object, depth: int) -> list[_Visit | _Exit | _CalleeSlot]:
+        """Steps in stack order (last item runs first) for a node with children."""
+
+        if type(value) is ast.arg:
+            arg = value
+            self.bound_names.add(arg.arg)
+            items: list[object] = [arg.annotation, arg.type_comment]
+            return [_Exit(arg, len(items), 1), *(_Visit(item, 0) for item in reversed(items))]
+        if isinstance(value, list):
+            return [_Exit(None, len(value), 0), *(_Visit(item, depth) for item in reversed(value))]
+        node = cast(ast.AST, value)
+        next_depth = self._record_node(node, depth)
+        fields = list(ast.iter_fields(node))
+        steps: list[_Visit | _Exit | _CalleeSlot] = [_Exit(node, len(fields), 1)]
+        for field_name, item in reversed(fields):
+            steps.append(_Visit(item, next_depth))
+            if type(node) is ast.Call and field_name == "func" and type(item) is ast.Name:
+                steps.append(_CalleeSlot())
+        return steps
 
     def _name(self, node: ast.Name) -> _CollectResult:
         arg_read_mask = self.arg_masks.get(node.id, 0)
         if type(node.ctx) is ast.Load and self.current_statement_loads is not None:
             self.current_statement_loads.add(node.id)
-        self._add_shape_token_triple(
-            "Name",
-            _name_role(node.id, self.args),
-            type(node.ctx).__name__,
-        )
+        if type(node.ctx) is not ast.Load:
+            self.bound_names.add(node.id)
+        self.shape_tokens.append("Name")
+        self.name_slots.append((len(self.shape_tokens), node.id))
+        self.shape_tokens.extend(("", type(node.ctx).__name__))
         return self._record(
             node,
             arg_read_mask,
             2,
-        )
-
-    def _arg(self, node: ast.arg) -> _CollectResult:
-        arg_read_mask = 0
-        node_count = 1
-        for item in (node.annotation, node.type_comment):
-            child_mask, child_count = self.collect(item)
-            arg_read_mask |= child_mask
-            node_count += child_count
-        return self._record(
-            node,
-            arg_read_mask,
-            node_count,
         )
 
     def _record(
@@ -375,31 +493,21 @@ class _FunctionCollector:
         return next_depth
 
     def _add_shape_token(self, token: str) -> None:
-        self.structure_hash = _hash_text(self.structure_hash, token)
+        self.shape_tokens.append(token)
 
     def _add_shape_token_pair(self, left: str, right: str) -> None:
-        self.structure_hash = _hash_text(_hash_text(self.structure_hash, left), right)
+        self.shape_tokens.extend((left, right))
 
     def _add_shape_token_triple(self, left: str, middle: str, right: str) -> None:
-        self.structure_hash = _hash_text(
-            _hash_text(_hash_text(self.structure_hash, left), middle),
-            right,
-        )
+        self.shape_tokens.extend((left, middle, right))
 
     def _record_node_shape(self, node: ast.AST, node_type: type[ast.AST]) -> None:
         if node_type is ast.Attribute:
             self._add_shape_token_pair(node_type.__name__, cast(ast.Attribute, node).attr)
-        elif node_type is ast.arg:
-            self._add_shape_token_pair(node_type.__name__, "_")
+        elif node_type is ast.keyword:
+            self._add_shape_token_pair(node_type.__name__, cast(ast.keyword, node).arg or "**")
         elif node_type is ast.FunctionDef or node_type is ast.AsyncFunctionDef:
             self._add_shape_token_pair(node_type.__name__, "_")
-        elif node_type is ast.Name:
-            name = cast(ast.Name, node)
-            self._add_shape_token_triple(
-                node_type.__name__,
-                _name_role(name.id, self.args),
-                type(name.ctx).__name__,
-            )
         else:
             self._add_shape_token(node_type.__name__)
 
@@ -415,6 +523,8 @@ class _FunctionCollector:
         return next_depth
 
     def _record_structure(self, node: ast.AST, node_type: type[ast.AST]) -> None:
+        if node_type in BINDING_NODE_TYPES:
+            self._record_binding(node)
         if node_type is ast.Call:
             self.calls.append(cast(ast.Call, node))
         elif node_type is ast.Attribute:
@@ -425,30 +535,114 @@ class _FunctionCollector:
             self.locals_.update(_target_names_many(cast(ast.Assign, node).targets))
         elif node_type is ast.AnnAssign:
             self.locals_.update(_target_names(cast(ast.AnnAssign, node).target))
-        elif node_type is ast.With:
-            self.controls.add("WITH")
-            for item in cast(ast.With, node).items:
+        elif isinstance(node, ast.With | ast.AsyncWith):
+            for item in node.items:
                 if item.optional_vars:
                     self.locals_.update(_target_names(item.optional_vars))
-        elif node_type in CONTROL_LOOP_NODE_TYPES:
-            self.controls.add("LOOP")
-        elif node_type in CONTROL_BRANCH_NODE_TYPES:
-            self.controls.add("BRANCH")
-        elif node_type is ast.Try:
-            self.controls.add("TRY")
+        if control := CONTROL_KINDS.get(node_type):
+            self.controls.add(control.value)
+
+    def _record_binding(self, node: ast.AST) -> None:
+        if isinstance(node, ast.Global | ast.Nonlocal):
+            self.outer_names.update(node.names)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            self.bound_names.update(
+                (alias.asname or alias.name).split(".")[0] for alias in node.names
+            )
+        elif name := getattr(node, "rest" if type(node) is ast.MatchMapping else "name", None):
+            self.bound_names.add(name)
+
+
+def body_tree(node: ast.FunctionDef | ast.AsyncFunctionDef) -> OrderedTree | None:
+    """Normalized body tree for tree-edit distance, labelled like the body hash.
+
+    Names become parameter/local roles or `FREE:name`; operators become `op:`
+    leaves so operator changes stay visible; expression contexts are dropped.
+    Relation-detail extraction builds the same tree from its own name roles. None
+    when the body nests deeper than `MAX_TREE_DEPTH`.
+    """
+
+    return operation_features(node, include_relation_detail=True).compact.body_tree
+
+
+def _body_tree(
+    node: ast.FunctionDef | ast.AsyncFunctionDef, roles: dict[str, str]
+) -> OrderedTree | None:
+    statements = [_tree(child, roles) for child in node.body]
+    if any(statement is None for statement in statements):
+        return None
+    return OrderedTree("body", tuple(statement for statement in statements if statement))
+
+
+def _tree(node: ast.AST, roles: dict[str, str]) -> OrderedTree | None:
+    """Iterative post-order build of one statement's tree; None past `MAX_TREE_DEPTH`."""
+
+    # Results stack, not an id() map: CPython shares operator nodes such as ast.Add().
+    results: list[OrderedTree] = []
+    stack: list[tuple[ast.AST, int, bool]] = [(node, 0, False)]
+    while stack:
+        current, depth, expanded = stack.pop()
+        if depth > MAX_TREE_DEPTH:
+            return None
+        children = _tree_children(current)
+        if not expanded and children:
+            stack.append((current, depth, True))
+            stack.extend((child, depth + 1, False) for child in reversed(children))
+            continue
+        first = len(results) - len(children)
+        items = tuple(results[first:])
+        del results[first:]
+        results.append(OrderedTree(_tree_label(current, roles), items))
+    return results[-1]
+
+
+def _tree_children(node: ast.AST) -> list[ast.AST]:
+    if type(node) in {ast.Name, ast.Constant} or isinstance(node, OPERATOR_NODE_TYPES):
+        return []
+    children: list[ast.AST] = []
+    for _, value in ast.iter_fields(node):
+        items = value if isinstance(value, list) else [value]
+        children.extend(
+            item
+            for item in items
+            if isinstance(item, ast.AST) and not isinstance(item, ast.expr_context)
+        )
+    return children
+
+
+def _tree_label(node: ast.AST, roles: dict[str, str]) -> str:
+    node_type = type(node)
+    if node_type is ast.Name:
+        name = cast(ast.Name, node).id
+        return f"Name:{roles.get(name, f'FREE:{name}')}"
+    if node_type is ast.Constant:
+        return _constant_label(cast(ast.Constant, node).value)
+    if isinstance(node, OPERATOR_NODE_TYPES):
+        return f"op:{node_type.__name__}"
+    if node_type is ast.Attribute:
+        return f"Attribute:{cast(ast.Attribute, node).attr}"
+    if node_type is ast.keyword:
+        return f"keyword:{cast(ast.keyword, node).arg or '**'}"
+    return node_type.__name__
+
+
+def _constant_label(value: object) -> str:
+    text = repr(value)
+    if len(text) > CONSTANT_LABEL_LIMIT:
+        digest = blake2b(text.encode("utf-8", "surrogatepass"), digest_size=4).hexdigest()
+        text = f"{text[: CONSTANT_LABEL_LIMIT // 2]}#{digest}"
+    return f"Constant:{type(value).__name__}:{text}"
 
 
 def _arg_roles(args: ast.arguments) -> dict[str, str]:
-    ordered = [*args.posonlyargs, *args.args, *args.kwonlyargs]
-    return {arg.arg: f"ARG{index}" for index, arg in enumerate(ordered)}
+    """Parameter roles in call order, `*args` and `**kwargs` included, as in the shape."""
+
+    ordered = [*args.posonlyargs, *args.args, args.vararg, *args.kwonlyargs, args.kwarg]
+    return {arg.arg: f"ARG{index}" for index, arg in enumerate(item for item in ordered if item)}
 
 
 def _arg_masks(args: dict[str, str]) -> dict[str, int]:
     return {name: 1 << int(role[3:]) for name, role in args.items()}
-
-
-def _name_role(name: str, args: dict[str, str]) -> str:
-    return args.get(name, "_")
 
 
 def _roles_from_mask(mask: int) -> tuple[str, ...]:
@@ -471,23 +665,60 @@ def _statement_sequence(
     return [_statement_token(stmt, context) for stmt in node.body]
 
 
+ASSIGN_KINDS: dict[type[ast.stmt], AssignKind] = {
+    ast.Assign: AssignKind.BIND,
+    ast.AnnAssign: AssignKind.BIND,
+    ast.AugAssign: AssignKind.UPDATE,
+}
+STATEMENT_KINDS: dict[type[ast.stmt], StatementKind] = {
+    ast.AnnAssign: StatementKind.DECLARE,
+    ast.If: StatementKind.IF,
+    ast.Match: StatementKind.SWITCH,
+    ast.For: StatementKind.LOOP,
+    ast.AsyncFor: StatementKind.LOOP,
+    ast.While: StatementKind.LOOP,
+    ast.Try: StatementKind.TRY,
+    ast.TryStar: StatementKind.TRY,
+    ast.Raise: StatementKind.RAISE,
+    ast.FunctionDef: StatementKind.DEFINE,
+    ast.AsyncFunctionDef: StatementKind.DEFINE,
+    ast.ClassDef: StatementKind.DEFINE,
+    ast.Break: StatementKind.BREAK,
+    ast.Continue: StatementKind.CONTINUE,
+    ast.Pass: StatementKind.PASS,
+    ast.Assert: StatementKind.ASSERT,
+    ast.Delete: StatementKind.DELETE,
+    ast.Import: StatementKind.IMPORT,
+    ast.ImportFrom: StatementKind.IMPORT,
+    ast.Global: StatementKind.DECLARE,
+    ast.Nonlocal: StatementKind.DECLARE,
+    ast.Expr: StatementKind.EXPR,
+}
+
+
 def _statement_token(stmt: ast.stmt, context: _FeatureContext) -> str:
-    stmt_type = type(stmt)
-    if stmt_type is ast.Expr and type(cast(ast.Expr, stmt).value) is ast.Call:
-        return "CALL:" + context.call_token(cast(ast.Call, cast(ast.Expr, stmt).value))
-    if stmt_type is ast.With:
-        with_stmt = cast(ast.With, stmt)
-        tokens = [
-            context.call_token(item.context_expr)
-            for item in with_stmt.items
-            if type(item.context_expr) is ast.Call
-        ]
-        return "WITH:" + "|".join(tokens)
-    if stmt_type is ast.Assign or stmt_type is ast.AnnAssign:
-        return "ASSIGN:" + type(stmt).__name__
-    if stmt_type is ast.Return:
-        return "RETURN:" + ",".join(context.iter_arg_reads(cast(ast.Return, stmt).value))
-    return type(stmt).__name__.upper()
+    """Map one top-level statement onto the shared `StatementKind` vocabulary."""
+
+    if isinstance(stmt, ast.Expr) and (call := _statement_call(stmt.value)):
+        return statement_token(StatementKind.CALL, context.call_token(call))
+    if isinstance(stmt, ast.With | ast.AsyncWith):
+        calls = (item.context_expr for item in stmt.items)
+        tokens = (context.call_token(call) for call in calls if isinstance(call, ast.Call))
+        return statement_token(StatementKind.WITH, "|".join(tokens))
+    assign = ASSIGN_KINDS.get(type(stmt))
+    if assign and not (isinstance(stmt, ast.AnnAssign) and stmt.value is None):
+        return assign_token(assign)
+    if isinstance(stmt, ast.Return):
+        return statement_token(
+            StatementKind.RETURN, ",".join(sorted(context.iter_arg_reads(stmt.value)))
+        )
+    return statement_token(STATEMENT_KINDS.get(type(stmt), StatementKind.OTHER))
+
+
+def _statement_call(value: ast.expr) -> ast.Call | None:
+    if isinstance(value, ast.Await):
+        value = value.value
+    return value if isinstance(value, ast.Call) else None
 
 
 def _call_facts(call: ast.Call, context: _FeatureContext) -> _CallFacts:
@@ -534,26 +765,6 @@ def _call_kwarg_shape(
             for keyword in call.keywords
             if keyword.arg
         )
-    )
-
-
-def _call_fingerprint(facts: _CallFacts) -> CallFingerprint:
-    return CallFingerprint(
-        kind="CALL",
-        token=facts.token,
-        callee_shape=CalleeShape(
-            namespace_tokens=facts.namespace_tokens,
-            name_tokens=facts.name_tokens,
-            call_kind=facts.call_kind,
-        ),
-        receiver_shape=(
-            ExpressionShape(facts.receiver_base, facts.receiver_path)
-            if facts.receiver_base
-            else None
-        ),
-        arg_roles=facts.arg_roles,
-        kwarg_shape=facts.kwarg_shape,
-        reads=_roles_from_mask(facts.read_mask),
     )
 
 
@@ -624,52 +835,6 @@ def _call_token(
     return f"{target}(args={','.join(arg_roles)};kwargs={kwargs})"
 
 
-def _parameter_use_vectors(
-    context: _FeatureContext,
-    call_facts: tuple[_CallFacts, ...],
-) -> dict[str, ParameterUseVector]:
-    vectors = {role: _MutableParameterUse() for role in context.args.values()}
-    for attribute in context.attributes:
-        shape = _expr_shape(attribute, context)
-        if shape.base in vectors and shape.access_path:
-            vectors[shape.base].access_paths.append(".".join(shape.access_path))
-    for call, facts in zip(context.calls, call_facts, strict=True):
-        _record_call_use(call, facts, context, vectors)
-    for return_node in context.returns:
-        for role in context.iter_arg_reads(return_node.value):
-            vectors[role].returned = True
-    return {role: _parameter_vector(vector) for role, vector in vectors.items()}
-
-
-def _record_call_use(
-    call: ast.Call,
-    facts: _CallFacts,
-    context: _FeatureContext,
-    vectors: dict[str, _MutableParameterUse],
-) -> None:
-    name = "_".join(facts.name_tokens)
-    if facts.receiver_base in vectors:
-        path = ".".join([*facts.receiver_path, name]).strip(".")
-        vectors[facts.receiver_base].receiver_of_calls.append(path)
-    for index, arg in enumerate(call.args):
-        for role in context.iter_arg_reads(arg):
-            vectors[role].passed_as_argument_to.append(f"{facts.callee_name}.arg{index}")
-    for keyword in call.keywords:
-        if not keyword.arg:
-            continue
-        for role in context.iter_arg_reads(keyword.value):
-            vectors[role].passed_as_argument_to.append(f"{facts.callee_name}.kwarg.{keyword.arg}")
-
-
-def _parameter_vector(vector: _MutableParameterUse) -> ParameterUseVector:
-    return ParameterUseVector(
-        access_paths=_dedupe_strs(vector.access_paths),
-        receiver_of_calls=_dedupe_strs(vector.receiver_of_calls),
-        passed_as_argument_to=_dedupe_strs(vector.passed_as_argument_to),
-        returned=vector.returned,
-    )
-
-
 def _parameter_features(
     context: _FeatureContext,
     call_facts: tuple[_CallFacts, ...],
@@ -692,9 +857,9 @@ def _parameter_features(
                 continue
             for role in context.iter_arg_reads(keyword.value):
                 features[role].add(f"passed_as_argument_to:{facts.callee_name}.kwarg.{keyword.arg}")
-    returned = {role for item in context.returns for role in context.iter_arg_reads(item.value)}
-    for role, values in features.items():
-        values.add(f"returned:{role in returned}")
+    for item in context.returns:
+        for role in context.iter_arg_reads(item.value):
+            features[role].add("returned")
     return {role: frozenset(values) for role, values in features.items()}
 
 
@@ -718,10 +883,6 @@ def _receiver_shapes(call_facts: tuple[_CallFacts, ...]) -> frozenset[str]:
         if shape := f"{facts.receiver_base}.{access}".rstrip("."):
             shapes.add(shape)
     return frozenset(shapes)
-
-
-def _dedupe_strs(value: Iterable[str]) -> tuple[str, ...]:
-    return tuple(sorted(set(value)))
 
 
 def _expr_shape(node: ast.AST, context: _FeatureContext) -> ExpressionShape:
@@ -774,44 +935,6 @@ def _constant_shape(value: object) -> str:
     if isinstance(value, (int, float, complex)):
         return "CONST_NUM"
     return f"CONST_{type(value).__name__.upper()}"
-
-
-def _local_dataflow_graph(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-    context: _FeatureContext,
-    sequence: list[str],
-) -> DataflowGraph:
-    nodes = [DataflowNode(id=role, label=role, kind="argument") for role in context.args.values()]
-    edges: list[DataflowEdge] = []
-    local_defs: dict[str, str] = {}
-    for index, stmt in enumerate(node.body):
-        stmt_id = f"STMT{index}"
-        label = sequence[index] if index < len(sequence) else type(stmt).__name__.upper()
-        sorted_arg_reads = context.arg_reads(stmt)
-        sorted_local_reads = sorted(context.local_reads(stmt))
-        sorted_local_writes = sorted(_local_writes(stmt))
-        nodes.append(
-            DataflowNode(
-                id=stmt_id,
-                label=label,
-                kind="statement",
-                arg_reads=tuple(sorted_arg_reads),
-            )
-        )
-        edges.extend(
-            DataflowEdge(role, stmt_id, "arg_read", role, label) for role in sorted_arg_reads
-        )
-        if index:
-            previous = f"STMT{index - 1}"
-            edges.append(
-                DataflowEdge(previous, stmt_id, "lexical_order", sequence[index - 1], label)
-            )
-        for name in sorted_local_reads:
-            if name in local_defs:
-                edges.append(DataflowEdge(local_defs[name], stmt_id, "local_flow", name, label))
-        for name in sorted_local_writes:
-            local_defs[name] = stmt_id
-    return DataflowGraph(nodes=tuple(nodes), edges=tuple(edges))
 
 
 def _compact_graph_features(
@@ -891,17 +1014,17 @@ def _parameter_defaults(args: ast.arguments, arg_roles: dict[str, str]) -> dict[
         }
     )
     return {
-        arg_roles[name]: _constant_shape(default.value)
-        if type(default) is ast.Constant
-        else type(default).__name__.upper()
+        arg_roles[name]: _default_role(default)
         for name, default in defaults.items()
         if name in arg_roles
     }
 
 
-def _hash_text(value: int, text: str) -> int:
-    return zlib.crc32(text.encode("utf-8"), value)
+def _default_role(default: ast.expr) -> str:
+    """A literal default's `CONST_*` role, else `DEFAULT_EXPRESSION`, as in ECMAScript."""
 
-
-def _format_shape_hash(value: int) -> str:
-    return f"shape32:{value:08x}"
+    if isinstance(default, ast.UnaryOp) and isinstance(default.op, ast.USub | ast.UAdd):
+        default = default.operand
+    if isinstance(default, ast.Constant):
+        return _constant_shape(default.value)
+    return DEFAULT_EXPRESSION

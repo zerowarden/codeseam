@@ -4,30 +4,20 @@ from functools import lru_cache
 
 from codeseam.analysis import (
     AbstractionCostComponents,
-    ActionKind,
-    ActionStatus,
     ArgumentNormalization,
-    CloneClass,
     CloneClassification,
-    ContextClassification,
-    DeltaKind,
     MemberRef,
     RefactorabilityComponents,
     RefactorAction,
     RefactorShape,
     RelationBasis,
-    RelationFlags,
-    RelationKind,
     RelationPair,
-    RelationScores,
-    ScoreBand,
     SequenceComparison,
     SequenceSkeleton,
     SequenceTemplateItem,
     TreeComparison,
-    sequence_skeleton_summary,
 )
-from codeseam.platform import Json, json_float, json_int, json_text_list, string_tuple
+from codeseam.platform import Json, json_int
 
 
 @lru_cache(maxsize=8192)
@@ -42,20 +32,6 @@ def member_ref_payload(member: MemberRef) -> Json:
         "semantic_roles": list(member.semantic_roles),
         "semantic_role_reasons": list(member.semantic_role_reasons),
     }
-
-
-def member_ref_from_payload(data: object) -> MemberRef:
-    payload = data if isinstance(data, dict) else {}
-    return MemberRef(
-        signature_id=str(payload.get("signature_id", "")),
-        function_id=str(payload.get("function_id", "")),
-        file=str(payload.get("file", "")),
-        symbol=str(payload.get("symbol", "")),
-        start_line=json_int(payload.get("start_line")),
-        end_line=json_int(payload.get("end_line")),
-        semantic_roles=tuple(json_text_list(payload, "semantic_roles")),
-        semantic_role_reasons=tuple(json_text_list(payload, "semantic_role_reasons")),
-    )
 
 
 @lru_cache(maxsize=8192)
@@ -85,31 +61,6 @@ def action_payload(action: RefactorAction) -> Json:
     if action.rejection_reasons:
         payload["rejection_reasons"] = list(action.rejection_reasons)
     return payload
-
-
-def action_from_payload(data: object) -> RefactorAction:
-    payload = data if isinstance(data, dict) else {}
-    return RefactorAction(
-        kind=_action_kind(payload.get("kind")),
-        status=_action_status(payload.get("status")),
-        confidence=json_float(payload.get("confidence")),
-        applies_to=tuple(
-            member_ref_from_payload(item)
-            for item in payload.get("applies_to", [])
-            if isinstance(item, dict)
-        ),
-        preconditions=_str_tuple(payload.get("preconditions")),
-        reason_codes=_str_tuple(payload.get("reason_codes")),
-        normalization=(
-            argument_normalization_from_payload(payload.get("normalization"))
-            if isinstance(payload.get("normalization"), dict)
-            else None
-        ),
-        extracted_region_common_prefix_length=extracted_region_common_prefix_length(
-            payload.get("extracted_region")
-        ),
-        rejection_reasons=_str_tuple(payload.get("rejection_reasons")),
-    )
 
 
 def relation_pair_payload(pair: RelationPair) -> Json:
@@ -162,80 +113,6 @@ def relation_pair_payload(pair: RelationPair) -> Json:
     return payload
 
 
-def relation_pair_from_payload(data: object) -> RelationPair:
-    payload = data if isinstance(data, dict) else {}
-    tree = TreeComparison(
-        tree_similarity=json_float(payload.get("tree_similarity")),
-        tree_distance=json_float(payload.get("tree_distance")),
-        tree_edit_distance=(
-            json_int(payload.get("tree_edit_distance"))
-            if payload.get("tree_edit_distance") is not None
-            else None
-        ),
-        tree_node_count=json_int(payload.get("tree_node_count")),
-        tree_distance_source=str(payload.get("tree_distance_source", "")),
-    )
-    sequence = SequenceComparison(
-        lcs_length=json_int(payload.get("lcs_length")),
-        common_prefix_length=json_int(payload.get("common_prefix_length")),
-        common_suffix_length=json_int(payload.get("common_suffix_length")),
-        inserted_block_count=json_int(payload.get("inserted_block_count")),
-        inserted_block_position=str(payload.get("inserted_block_position", "")),
-        shared_argument_flow_in_tail=bool(payload.get("shared_argument_flow_in_tail")),
-        sequence_similarity=json_float(payload.get("sequence_similarity")),
-        left_statement_count=json_int(payload.get("left_statement_count")),
-        right_statement_count=json_int(payload.get("right_statement_count")),
-    )
-    scores = RelationScores(
-        name=json_float(payload.get("name_similarity")),
-        parameter_use=json_float(payload.get("parameter_use_similarity")),
-        call_multiset=json_float(payload.get("call_multiset_similarity")),
-        graph=json_float(payload.get("graph_similarity")),
-        relatedness=json_float(payload.get("relatedness_score")),
-        refactorability=json_float(payload.get("refactorability_score")),
-        abstraction_cost=json_float(payload.get("abstraction_cost_score")),
-        confidence=json_float(payload.get("confidence_score")),
-        risk=json_float(payload.get("risk_score")),
-    )
-    relation_basis = relation_basis_from_payload(payload.get("relation_basis"))
-    anti_unification = sequence_skeleton_from_payload(payload.get("anti_unification"))
-    return RelationPair(
-        left=member_ref_from_payload(payload.get("left")),
-        right=member_ref_from_payload(payload.get("right")),
-        scores=scores,
-        tree=tree,
-        sequence=sequence,
-        refactorability_components=refactorability_components_from_payload(
-            payload.get("refactorability_components")
-        ),
-        abstraction_cost_components=abstraction_cost_components_from_payload(
-            payload.get("abstraction_cost_components")
-        ),
-        relation_kind=_relation_kind(payload.get("relation_kind")),
-        relation_basis=relation_basis,
-        flags=relation_basis.flags,
-        relation_kinds=_relation_kind_tuple(payload.get("relation_kinds")),
-        clone_family=_clone_class(payload.get("clone_family")),
-        clone_type=_clone_class(payload.get("clone_type")),
-        recommended_action=_action_kind(payload.get("recommended_action")),
-        clone_classification=clone_classification_from_payload(payload.get("clone_classification")),
-        refactorability_kind=_score_band(payload.get("refactorability_kind")),
-        delta_kinds=_delta_kind_tuple(payload.get("delta_kinds")),
-        anti_unification=anti_unification,
-        anti_unification_summary=sequence_skeleton_summary(anti_unification),
-        refactor_action_candidates=tuple(
-            action_from_payload(item)
-            for item in payload.get("refactor_action_candidates", [])
-            if isinstance(item, dict)
-        ),
-        same_role=bool(payload.get("same_role")),
-        role=str(payload.get("role", "")),
-        max_body_line_count=json_int(payload.get("max_body_line_count")),
-        min_body_line_count=json_int(payload.get("min_body_line_count")),
-        refactor_shape=None,
-    )
-
-
 def sequence_comparison_payload(sequence: SequenceComparison) -> Json:
     return {
         "lcs_length": sequence.lcs_length,
@@ -275,19 +152,6 @@ def argument_normalization_payload(normalization: ArgumentNormalization) -> Json
     }
 
 
-def argument_normalization_from_payload(data: object) -> ArgumentNormalization:
-    payload = data if isinstance(data, dict) else {}
-    return ArgumentNormalization(
-        wrapper=str(payload.get("wrapper", "")),
-        primitive=str(payload.get("primitive", "")),
-        wrapper_parameter_type=str(payload.get("wrapper_parameter_type", "")),
-        primitive_parameter_type=str(payload.get("primitive_parameter_type", "")),
-        transform_tokens=_str_tuple(payload.get("transform_tokens")),
-        shared_operation_tokens=_str_tuple(payload.get("shared_operation_tokens")),
-        interpretation=str(payload.get("interpretation", "")),
-    )
-
-
 def relation_basis_payload(basis: RelationBasis) -> Json:
     return {
         "body_hash_match": basis.flags.body_hash_match,
@@ -309,32 +173,6 @@ def relation_basis_payload(basis: RelationBasis) -> Json:
     }
 
 
-def relation_basis_from_payload(data: object) -> RelationBasis:
-    payload = data if isinstance(data, dict) else {}
-    flags = RelationFlags(
-        body_hash_match=bool(payload.get("body_hash_match")),
-        same_signature_shape=bool(payload.get("same_signature_shape")),
-        same_tree=bool(payload.get("same_tree")),
-        literal_shapes_differ=bool(payload.get("literal_shapes_differ")),
-        call_multiset_differs=bool(payload.get("call_multiset_differs")),
-        same_call_multiset=bool(payload.get("same_call_multiset")),
-        control_vector_differs=bool(payload.get("control_vector_differs")),
-        parameter_flow_match=bool(payload.get("parameter_flow_match")),
-        same_return_shape=bool(payload.get("same_return_shape")),
-        same_error_shape=bool(payload.get("same_error_shape")),
-        shared_argument_flow_through_tail=bool(payload.get("shared_argument_flow_through_tail")),
-    )
-    return RelationBasis(
-        flags=flags,
-        argument_normalization=argument_normalization_from_payload(
-            payload.get("argument_normalization")
-        ),
-        shared_prefix_length=json_int(payload.get("shared_prefix_length")),
-        shared_suffix_length=json_int(payload.get("shared_suffix_length")),
-        lcs_length=json_int(payload.get("lcs_length")),
-    )
-
-
 def clone_classification_payload(classification: CloneClassification) -> Json:
     return {
         "clone_type": classification.clone_type.value,
@@ -342,16 +180,6 @@ def clone_classification_payload(classification: CloneClassification) -> Json:
         "default_action": classification.default_action.value,
         "basis": list(classification.basis),
     }
-
-
-def clone_classification_from_payload(data: object) -> CloneClassification:
-    payload = data if isinstance(data, dict) else {}
-    return CloneClassification(
-        clone_type=_clone_class(payload.get("clone_type")),
-        syntactic_strength=str(payload.get("syntactic_strength", "")),
-        default_action=_action_kind(payload.get("default_action")),
-        basis=_str_tuple(payload.get("basis")),
-    )
 
 
 def refactorability_components_payload(components: RefactorabilityComponents) -> Json:
@@ -368,21 +196,6 @@ def refactorability_components_payload(components: RefactorabilityComponents) ->
     }
 
 
-def refactorability_components_from_payload(data: object) -> RefactorabilityComponents:
-    payload = data if isinstance(data, dict) else {}
-    return RefactorabilityComponents(
-        common_region_size=json_float(payload.get("common_region_size")),
-        contiguous_common_region=json_float(payload.get("contiguous_common_region")),
-        low_hole_count=json_float(payload.get("low_hole_count")),
-        low_hole_complexity=json_float(payload.get("low_hole_complexity")),
-        same_return_shape=json_float(payload.get("same_return_shape")),
-        same_error_shape=json_float(payload.get("same_error_shape")),
-        same_source_role=json_float(payload.get("same_source_role")),
-        local_module_scope=json_float(payload.get("local_module_scope")),
-        abstraction_cost_penalty=json_float(payload.get("abstraction_cost_penalty")),
-    )
-
-
 def abstraction_cost_components_payload(components: AbstractionCostComponents) -> Json:
     return {
         "parameter_count_estimate": components.parameter_count_estimate,
@@ -394,20 +207,6 @@ def abstraction_cost_components_payload(components: AbstractionCostComponents) -
         "cross_module_dependency_cost": components.cross_module_dependency_cost,
         "public_api_cost": components.public_api_cost,
     }
-
-
-def abstraction_cost_components_from_payload(data: object) -> AbstractionCostComponents:
-    payload = data if isinstance(data, dict) else {}
-    return AbstractionCostComponents(
-        parameter_count_estimate=json_float(payload.get("parameter_count_estimate")),
-        hole_count=json_float(payload.get("hole_count")),
-        hole_complexity=json_float(payload.get("hole_complexity")),
-        branch_delta_count=json_float(payload.get("branch_delta_count")),
-        local_temp_delta_count=json_float(payload.get("local_temp_delta_count")),
-        callback_or_strategy_need=json_float(payload.get("callback_or_strategy_need")),
-        cross_module_dependency_cost=json_float(payload.get("cross_module_dependency_cost")),
-        public_api_cost=json_float(payload.get("public_api_cost")),
-    )
 
 
 def sequence_skeleton_payload(skeleton: SequenceSkeleton) -> Json:
@@ -440,43 +239,6 @@ def _sequence_template_item_payload(item: SequenceTemplateItem) -> Json:
     if item.roles:
         payload["roles"] = list(item.roles)
     return payload
-
-
-def sequence_skeleton_from_payload(data: object) -> SequenceSkeleton:
-    payload = data if isinstance(data, dict) else {}
-    template = tuple(
-        SequenceTemplateItem(
-            kind=str(item.get("kind", "")),
-            token=str(item.get("token", "")),
-            id=str(item.get("id", "")),
-            role=str(item.get("role", "")),
-            roles=_str_tuple(item.get("roles")),
-        )
-        for item in payload.get("template", [])
-        if isinstance(item, dict)
-    )
-    bindings: dict[str, dict[str, tuple[str, ...]]] = {}
-    raw_bindings = payload.get("hole_bindings", {})
-    if isinstance(raw_bindings, dict):
-        for member, holes in raw_bindings.items():
-            if not isinstance(holes, dict):
-                continue
-            bindings[str(member)] = {
-                str(hole): _str_tuple(tokens) for hole, tokens in holes.items()
-            }
-    return SequenceSkeleton(
-        template=template,
-        hole_bindings=bindings,
-        stable_statement_count=json_int(payload.get("stable_statement_count")),
-        stable_node_ratio=json_float(payload.get("stable_node_ratio")),
-        common_prefix_length=json_int(payload.get("common_prefix_length")),
-        common_suffix_length=json_int(payload.get("common_suffix_length")),
-        common_prefix_ratio=json_float(payload.get("common_prefix_ratio")),
-        hole_count=json_int(payload.get("hole_count")),
-        max_hole_size=json_int(payload.get("max_hole_size")),
-        hole_size_variance=str(payload.get("hole_size_variance", "")),
-        shared_param_flow_through_holes=bool(payload.get("shared_param_flow_through_holes")),
-    )
 
 
 def refactor_shape_payload(shape: RefactorShape) -> Json:
@@ -537,109 +299,8 @@ def extracted_region_common_prefix_length(data: object) -> int:
     return json_int(data.get("common_prefix_length"))
 
 
-def context_classification_payload(classification: ContextClassification) -> Json:
-    return {
-        "kind": classification.kind,
-        "context_tags": list(classification.context_tags),
-        "visibility": classification.visibility.value,
-        "summary_eligible": classification.summary_eligible,
-        "action": classification.action.value,
-        "refactor_value": classification.refactor_value,
-        "refactor_safety": classification.refactor_safety,
-        "downgrade_reasons": list(classification.downgrade_reasons),
-        **({"review_tier": classification.review_tier.value} if classification.review_tier else {}),
-        **(
-            {"evidence_strength": classification.evidence_strength.value}
-            if classification.evidence_strength
-            else {}
-        ),
-        **(
-            {"boundary_specificity": classification.boundary_specificity.value}
-            if classification.boundary_specificity
-            else {}
-        ),
-        **(
-            {"corroborating_signals": list(classification.corroborating_signals)}
-            if classification.corroborating_signals
-            else {}
-        ),
-    }
-
-
-def _str_tuple(value: object) -> tuple[str, ...]:
-    return string_tuple(value, coerce=True)
-
-
-def _action_kind(value: object) -> ActionKind:
-    if isinstance(value, ActionKind):
-        return value
-    try:
-        return ActionKind(str(value))
-    except (TypeError, ValueError):
-        return ActionKind.OBSERVE
-
-
-def _action_status(value: object) -> ActionStatus:
-    if isinstance(value, ActionStatus):
-        return value
-    try:
-        return ActionStatus(str(value))
-    except (TypeError, ValueError):
-        return ActionStatus.CONDITIONAL
-
-
-def _relation_kind(value: object) -> RelationKind:
-    if isinstance(value, RelationKind):
-        return value
-    try:
-        return RelationKind(str(value))
-    except (TypeError, ValueError):
-        return RelationKind.NONE
-
-
-def _relation_kind_tuple(value: object) -> tuple[RelationKind, ...]:
-    return tuple(_relation_kind(item) for item in string_tuple(value, coerce=True))
-
-
-def _delta_kind(value: object) -> DeltaKind | None:
-    if isinstance(value, DeltaKind):
-        return value
-    try:
-        return DeltaKind(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _delta_kind_tuple(value: object) -> tuple[DeltaKind, ...]:
-    return tuple(
-        delta
-        for item in string_tuple(value, coerce=True)
-        if (delta := _delta_kind(item)) is not None
-    )
-
-
-def _clone_class(value: object) -> CloneClass:
-    if isinstance(value, CloneClass):
-        return value
-    try:
-        return CloneClass(str(value))
-    except (TypeError, ValueError):
-        return CloneClass.SIGNATURE_SIGNAL_ONLY
-
-
-def _score_band(value: object) -> ScoreBand:
-    if isinstance(value, ScoreBand):
-        return value
-    try:
-        return ScoreBand(str(value))
-    except (TypeError, ValueError):
-        return ScoreBand.TRACK_ONLY
-
-
 __all__ = [
     "action_payload",
-    "context_classification_payload",
     "member_ref_payload",
-    "relation_pair_from_payload",
     "relation_pair_payload",
 ]

@@ -8,6 +8,7 @@ from typing import Protocol, TypeVar, cast
 from codeseam.analysis import FunctionIR
 from codeseam.cache.main import Cache, CacheCodec, CacheWriteBuffer
 from codeseam.cache.store import PersistentCache
+from codeseam.platform import verified_bytes
 
 T = TypeVar("T")
 
@@ -51,9 +52,11 @@ class LanguageRunCache:
     )
 
     def source_bytes(self, context: _LanguageAnalysisContext) -> bytes:
+        """One verified snapshot per file, shared by every reader in the run."""
+
         key = _source_key(context)
         if key not in self._sources:
-            self._sources[key] = context.path.read_bytes()
+            self._sources[key] = verified_bytes(context.path, context.content_hash)
         return self._sources[key]
 
     def analysis(

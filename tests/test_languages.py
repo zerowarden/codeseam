@@ -47,6 +47,7 @@ from codeseam.cache import (
     signature_output_cache_payload,
 )
 from codeseam.pipeline.repository_enrichment import build_repository_enrichment
+from codeseam.platform import sha256_bytes
 
 LANGUAGE_FIXTURES = Path(__file__).parent / "fixtures" / "languages"
 EXPECTED_ADAPTERS = {
@@ -57,7 +58,7 @@ EXPECTED_ADAPTERS = {
     "JSX": ("mod.jsx", "treesitter_ecmascript_typescript"),
 }
 EXPECTED_CAPABILITIES = {
-    "Python": ("python_ast", True, True, False, True),
+    "Python": ("python_ast", True, True, False, False),
     "TypeScript": ("tree_sitter", True, False, True, False),
     "TSX": ("tree_sitter", True, False, True, False),
     "JavaScript": ("tree_sitter", True, False, True, False),
@@ -452,23 +453,15 @@ def test_js_ts_path_roles_mark_generated_and_test_surfaces() -> None:
             },
         ),
         (
-            "isListNode",
-            {
-                FunctionSemanticRole.PREDICATE_BOUNDARY,
-            },
-        ),
-        (
             "hasUuid",
             {
                 FunctionSemanticRole.IMPLEMENTATION_CONTRACT_METHOD,
-                FunctionSemanticRole.PREDICATE_BOUNDARY,
             },
         ),
         (
             "supportsShare",
             {
                 FunctionSemanticRole.IMPLEMENTATION_CONTRACT_METHOD,
-                FunctionSemanticRole.PREDICATE_BOUNDARY,
             },
         ),
         (
@@ -531,7 +524,7 @@ def test_js_ts_run_cache_reuses_source_and_function_parse(
         relative_path="service.ts",
         role="source",
         language="TypeScript",
-        content_hash="content-v1",
+        content_hash=sha256_bytes(path.read_bytes()),
         run_cache=cache,
     )
     read_count = 0
@@ -575,7 +568,7 @@ function save(path: PathLike, text: string): string {
         encoding="utf-8",
     )
     registry = default_language_registry()
-    file_record = _file_record("service.ts", content_hash="content-v1")
+    file_record = _file_record("service.ts", content_hash=sha256_bytes(path.read_bytes()))
     context = LanguageAnalysisContext(
         path=path,
         relative_path="service.ts",
@@ -638,7 +631,7 @@ def test_signature_cache_payload_omits_body_tree(tmp_path: Path) -> None:
     ).signatures
     assert records[0].body_tree is None
     assert records[0].body_shape == ""
-    assert records[0].body_shape_hash.startswith("shape32:")
+    assert records[0].body_shape_hash.startswith("shape128:")
     assert records[0].body_tree_node_count > 0
 
     analyses = signature_analyses_from_records(records)
@@ -719,7 +712,7 @@ def test_python_relation_detail_warm_cache_uses_function_slice(
     )
 
     monkeypatch.setattr(
-        "codeseam.adapters.languages.python.adapter.parse_python",
+        "codeseam.adapters.languages.python.adapter.parse_python_source",
         _fail_if_called("warm relation hydration should not parse the full file"),
     )
     monkeypatch.setattr(
@@ -870,3 +863,42 @@ class _RepoFactsAdapter(StaticLanguageSupport):
 
     def extract_repo_facts(self, facts: object) -> object:
         return {"selected_files": getattr(facts, "selected_file_count", 0)}
+
+
+@pytest.mark.parametrize("language", ["typescript", "TypeScript", "javascript", "tsx", "python"])
+def test_registry_lookup_ignores_language_case(language: str) -> None:
+    # Signature records store lowercase names; adapters declare display names.
+    assert default_language_registry().adapter_for_language(language) is not None
+
+
+ECMASCRIPT_CALLABLE_FORMS = """
+class Widget { handler = () => { return 1; }; static util = function () { return 2; }; }
+export default function () { return 3; }
+const Anon = class { go() { return 5; } };
+"""
+
+
+@pytest.mark.parametrize(
+    ("filename", "language", "abstract_class"),
+    [
+        ("forms.ts", "TypeScript", "abstract class Base { run(): number { return 4; } }"),
+        ("forms.js", "JavaScript", "class Base { run() { return 4; } }"),
+    ],
+)
+def test_ecmascript_extracts_field_default_and_class_expression_callables(
+    tmp_path: Path, filename: str, language: str, abstract_class: str
+) -> None:
+    path = tmp_path / filename
+    path.write_text(ECMASCRIPT_CALLABLE_FORMS + abstract_class + "\n", encoding="utf-8")
+    adapter = default_language_registry().adapter_for_language(language)
+    assert adapter is not None
+
+    analysis = adapter.extract_analysis(LanguageAnalysisContext(path, filename, "source", language))
+
+    assert {(item.symbol, item.container) for item in analysis.signatures} == {
+        ("handler", "Widget"),
+        ("util", "Widget"),
+        ("default", None),
+        ("go", "Anon"),
+        ("run", "Base"),
+    }

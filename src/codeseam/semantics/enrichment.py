@@ -20,14 +20,6 @@ class SemanticMode(StrEnum):
     REQUIRED = "required"
 
 
-SEMANTIC_MODE_BY_VALUE = {
-    SemanticMode.OFF.value: SemanticMode.OFF,
-    SemanticMode.AUTO.value: SemanticMode.AUTO,
-    SemanticMode.PROJECT.value: SemanticMode.PROJECT,
-    SemanticMode.REQUIRED.value: SemanticMode.REQUIRED,
-}
-
-
 class SemanticProviderStatus(StrEnum):
     """Provider availability for one semantic enrichment request."""
 
@@ -84,10 +76,18 @@ class SemanticEnrichmentRequest:
 
 @dataclass(frozen=True, slots=True)
 class SemanticProviderMetadata:
-    """Provider identity attached to semantic results."""
+    """Provider identity, and whether its compiler could answer.
+
+    `status` on the result says the worker answered (transport); these fields
+    say whether a compiler was loaded and its type checker ran. Item
+    `resolved` flags give coverage.
+    """
 
     name: str = ""
     mode: SemanticMode = SemanticMode.OFF
+    compiler_available: bool = False
+    compiler_version: str = ""
+    typechecker_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,14 +177,6 @@ class SemanticEnrichmentResult:
         )
 
 
-def semantic_mode(value: object) -> SemanticMode:
-    if isinstance(value, SemanticMode):
-        return value
-    if not isinstance(value, str):
-        return SemanticMode.OFF
-    return SEMANTIC_MODE_BY_VALUE.get(value, SemanticMode.OFF)
-
-
 def semantic_provider_status(value: object) -> SemanticProviderStatus:
     if isinstance(value, SemanticProviderStatus):
         return value
@@ -215,6 +207,5 @@ __all__ = [
     "SemanticProviderMetadata",
     "SemanticProviderStatus",
     "SemanticSymbolIdentity",
-    "semantic_mode",
     "semantic_provider_status",
 ]

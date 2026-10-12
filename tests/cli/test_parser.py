@@ -16,7 +16,6 @@ EXPECTED_TARGET_TOP = 2
     [
         pytest.param(["analyze"], "command", "analyze", id="analyze-command"),
         pytest.param(["analyze", "repo"], "path", "repo", id="analyze-positional-path"),
-        pytest.param(["analyze", "--since", "main"], "base_ref", "main", id="analyze-since"),
         pytest.param(
             ["analyze", "--show-exclusions"],
             "show_exclusions",
@@ -134,3 +133,12 @@ def test_invalid_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None
 
     output = capsys.readouterr()
     assert_contains(output.err, ["usage: codeseam", "analyze"])
+
+
+@pytest.mark.parametrize("args", [["--base", "main"], ["--since", "main"], ["--strict"]])
+def test_unimplemented_analyze_flags_are_rejected(
+    args: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["analyze", *args]) == CONFIG_ERROR
+    assert "unrecognized arguments" in capsys.readouterr().err

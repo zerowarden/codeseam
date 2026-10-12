@@ -35,13 +35,18 @@ from codeseam.analysis.signatures.model import (
     SignatureRecord,
     SignatureShape,
     call_kwarg_shape_values,
+    dataflow_graph_features,
+    literal_shapes,
+    normalization_transform_tokens,
+    receiver_shapes,
     signature_analysis_from_core,
     signature_analysis_from_record,
     signature_analysis_key,
     signature_core_from_record,
+    statement_arg_reads_from_graph,
 )
 from codeseam.analysis.signatures.shape import canonical_shape
-from codeseam.analysis.signatures.tree import OrderedTree, ordered_tree_size
+from codeseam.analysis.signatures.tree import MAX_TREE_DEPTH, OrderedTree, ordered_tree_size
 from codeseam.analysis.signatures.types import (
     BoundarySpecificity,
     SignatureTypeClass,
@@ -49,8 +54,27 @@ from codeseam.analysis.signatures.types import (
     classify_signature_type,
     collection_element_type_class,
 )
+from codeseam.analysis.signatures.vocabulary import (
+    DEFAULT_EXPRESSION,
+    AssignKind,
+    ControlKind,
+    StatementKind,
+    assign_token,
+    statement_token,
+)
 
 __all__ = [
+    "DEFAULT_EXPRESSION",
+    "AssignKind",
+    "ControlKind",
+    "StatementKind",
+    "assign_token",
+    "statement_token",
+    "dataflow_graph_features",
+    "literal_shapes",
+    "normalization_transform_tokens",
+    "receiver_shapes",
+    "statement_arg_reads_from_graph",
     "AdapterId",
     "BoundarySpecificity",
     "CallFingerprint",
@@ -66,6 +90,7 @@ __all__ = [
     "LanguageFamily",
     "NORMALIZATION_TRANSFORM_METHODS",
     "NormalizationLevel",
+    "MAX_TREE_DEPTH",
     "OrderedTree",
     "ParameterUseVector",
     "PolicyConstant",

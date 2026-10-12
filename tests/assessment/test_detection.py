@@ -13,6 +13,10 @@ from codeseam.analysis import (
     FindingMetrics,
     score_detection_confidence,
 )
+from codeseam.analysis.assessment.evidence import (
+    EVIDENCE_BODY_STRUCTURE_SIMILARITY,
+    EVIDENCE_NAME_SIMILARITY,
+)
 
 POLICY = DetectionPolicy()
 
@@ -29,13 +33,8 @@ POLICY = DetectionPolicy()
             id="unsupported-structural-relation",
         ),
         pytest.param(
-            FindingMetrics(
-                structural_relation_pair_count=1,
-                max_relation_confidence_score=0.70,
-                max_tree_similarity=0.80,
-                max_name_similarity=0.70,
-            ),
-            (),
+            FindingMetrics(structural_relation_pair_count=1, lead_confidence_score=0.70),
+            (EVIDENCE_BODY_STRUCTURE_SIMILARITY, EVIDENCE_NAME_SIMILARITY),
             EvidenceQuality.STRUCTURAL,
             0.80,
             ("structural_relation", "tree_similarity", "name_similarity"),
@@ -50,12 +49,12 @@ POLICY = DetectionPolicy()
             id="signature-only-recurrence",
         ),
         pytest.param(
-            FindingMetrics(call_fingerprint_count=2, control_context_count=2),
+            FindingMetrics(member_count=2),
             (EVIDENCE_CALL_FINGERPRINT_OVERLAP, EVIDENCE_CONTROL_CONTEXT_SIMILARITY),
-            EvidenceQuality.PROXY,
-            0.50,
-            ("call_fingerprint", "control_context"),
-            id="proxy-with-support",
+            EvidenceQuality.SIGNATURE_ONLY,
+            0.18,
+            ("signature_shape_recurrence",),
+            id="agreement-classes-without-relation-pairs-stay-signature-only",
         ),
         pytest.param(
             FindingMetrics(structural_duplicate_pair_count=1, structural_relation_pair_count=1),

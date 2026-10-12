@@ -26,12 +26,31 @@ def test_inventory_ids_are_deterministic_and_role_propagates(tmp_path: Path) -> 
     first = _inventory(tmp_path)
     second = _inventory(tmp_path)
 
-    assert [record.function_id for record in first] == ["fn_000001", "fn_000002"]
+    assert all(record.function_id.startswith("fn_") for record in first)
     assert first == second
     assert {record.symbol: record.role for record in first} == {
         "b": "source",
         "test_a": "test",
     }
+
+
+def test_inventory_ids_do_not_depend_on_other_files(tmp_path: Path) -> None:
+    write_atomic(tmp_path / "src" / "b.py", "def b():\n    return 1\n\n\ndef c():\n    return 2\n")
+    before = {record.symbol: record.function_id for record in _inventory(tmp_path)}
+    write_atomic(tmp_path / "src" / "a.py", "def a():\n    return 0\n")
+
+    after = {record.symbol: record.function_id for record in _inventory(tmp_path)}
+
+    assert after == {**before, "a": after["a"]}
+    assert len(set(after.values())) == len(after)
+
+
+def test_identical_same_name_functions_get_distinct_ids(tmp_path: Path) -> None:
+    write_atomic(tmp_path / "src" / "b.py", "def b():\n    return 1\n\n\ndef b():\n    return 1\n")
+
+    first, second = (record.function_id for record in _inventory(tmp_path))
+
+    assert second == f"{first}-2"
 
 
 def test_function_record_serializes_without_generic_dataclass_walk(tmp_path: Path) -> None:
@@ -41,7 +60,7 @@ def test_function_record_serializes_without_generic_dataclass_walk(tmp_path: Pat
     payload = record.to_json_object()
 
     assert payload["schema_version"] == "codeseam.function_unit.v1"
-    assert payload["function_id"] == "fn_000001"
+    assert payload["function_id"] == record.function_id
     assert payload["file"] == "src/app.py"
     assert payload["symbol"] == "app"
     assert payload["line_span"] == record.line_span
@@ -54,7 +73,7 @@ def test_audit_writes_schema_valid_functions_jsonl(
     monkeypatch.chdir(tmp_path)
     write_atomic(tmp_path / "src" / "app.py", "def app():\n    return 1\n")
     config = load_config(tmp_path)
-    paths = OutputPaths(config.path("output", "root"))
+    paths = OutputPaths(config.output_root)
     paths.ensure_audit()
     records = _inventory(tmp_path)
 
@@ -65,7 +84,7 @@ def test_audit_writes_schema_valid_functions_jsonl(
 
 def _inventory(root: Path) -> tuple[FunctionRecord, ...]:
     config = load_config(root)
-    paths = OutputPaths(config.path("output", "root"))
+    paths = OutputPaths(config.output_root)
     paths.ensure_audit()
     context = scan_repository(config, paths)
     inventory = build_function_inventory(config, build_repository_facts(context))
@@ -81,7 +100,7 @@ def test_inventory_summary_records_files_without_function_units(tmp_path: Path) 
     write_atomic(tmp_path / "src" / "empty.py", "VALUE = 1\n")
     write_atomic(tmp_path / "src" / "app.py", "def app():\n    return 1\n")
     config = load_config(tmp_path)
-    paths = OutputPaths(config.path("output", "root"))
+    paths = OutputPaths(config.output_root)
     paths.ensure_audit()
     context = scan_repository(config, paths)
 

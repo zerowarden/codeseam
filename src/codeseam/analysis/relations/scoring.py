@@ -10,12 +10,15 @@ from codeseam.analysis.relations.models import (
     SequenceComparison,
     SimilarityScores,
 )
-from codeseam.analysis.relations.policy import PAIR_POLICY, RELATION_ASSESSMENT_POLICY
+from codeseam.analysis.relations.policy import RELATION_ASSESSMENT_POLICY
 from codeseam.analysis.relations.unification import SequenceSkeleton
 
 type ScoreComponents = RefactorabilityComponents | AbstractionCostComponents
 
 DELTA_RISK_WEIGHTS = {
+    # An operator change (`+`/`-`, `<`/`>`, `and`/`or`, `not`) changes the
+    # computation itself, however similar the rest of the tree is.
+    DeltaKind.OPERATOR: 0.50,
     DeltaKind.RETURN_VALUE: 0.18,
     DeltaKind.ERROR_HANDLING: 0.18,
     DeltaKind.CONTROL_FLOW: 0.15,
@@ -41,16 +44,35 @@ BRANCH_DELTAS = {
 LOCAL_TEMP_DELTAS = {DeltaKind.EXTRA_LOCAL_TEMPORARY, DeltaKind.EXTRA_ASSIGNMENT}
 
 
+RELATEDNESS_BASE = 0.10
+RELATEDNESS_WEIGHTS = {
+    "parameter": 0.20,
+    "call": 0.15,
+    "sequence": 0.15,
+    "tree": 0.20,
+    "graph": 0.15,
+    "name": 0.05,
+}
+
+
 def relatedness_score(scores: SimilarityScores) -> float:
-    score = (
-        0.10
-        + 0.20 * scores.parameter
-        + 0.15 * scores.call
-        + 0.15 * scores.sequence
-        + 0.20 * scores.tree
-        + 0.15 * scores.graph
-        + 0.05 * scores.name
-    )
+    """Weighted similarity, renormalized over the components with evidence.
+
+    With every component present this is the plain weighted sum; a component
+    neither member has evidence for is dropped rather than scored 0 or 1.
+    """
+    values = {
+        "parameter": scores.parameter,
+        "call": scores.call,
+        "sequence": scores.sequence,
+        "tree": scores.tree,
+        "graph": scores.graph,
+        "name": scores.name,
+    }
+    weights = {k: w for k, w in RELATEDNESS_WEIGHTS.items() if k not in scores.absent}
+    weighted = sum(weight * values[key] for key, weight in weights.items())
+    total = sum(RELATEDNESS_WEIGHTS.values())
+    score = RELATEDNESS_BASE + total * weighted / sum(weights.values())
     return round(min(1.0, score), 4)
 
 
@@ -101,7 +123,7 @@ def abstraction_cost_components_features(
     *,
     anti_unification: SequenceSkeleton,
     deltas: tuple[DeltaKind, ...],
-    parameter_similarity: float,
+    parameter_mismatch: bool,
 ) -> AbstractionCostComponents:
     max_statement_count = max(left.body_line_count, right.body_line_count, 1)
     max_hole_size = anti_unification.max_hole_size
@@ -121,7 +143,7 @@ def abstraction_cost_components_features(
             4,
         ),
         callback_or_strategy_need=(
-            0.10 if needs_callback_or_strategy_score(deltas, parameter_similarity) else 0.0
+            0.10 if needs_callback_or_strategy_score(deltas, parameter_mismatch) else 0.0
         ),
         cross_module_dependency_cost=0.10 if not same_module_scope_features(left, right) else 0.0,
         public_api_cost=0.08 if public_api_cost_features(left, right) else 0.0,
@@ -163,13 +185,12 @@ def delta_count(deltas: tuple[DeltaKind, ...], kinds: set[DeltaKind]) -> int:
 
 def needs_callback_or_strategy_score(
     deltas: tuple[DeltaKind, ...],
-    parameter_similarity: float,
+    parameter_mismatch: bool,
 ) -> bool:
     if DeltaKind.ARGUMENT_NORMALIZATION in deltas:
         return False
-    return bool(
+    return parameter_mismatch and bool(
         {DeltaKind.CALLEE_NAME, DeltaKind.RECEIVER_SHAPE, DeltaKind.ARGUMENT_FLOW} & set(deltas)
-        and parameter_similarity < PAIR_POLICY.parameter_flow_threshold
     )
 
 

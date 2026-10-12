@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import shutil
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import TypeVar
 
 from codeseam.analysis import (
@@ -24,11 +25,13 @@ from codeseam.cache import (
 from codeseam.config import Config
 from codeseam.output import (
     ReportArtifacts,
+    ReportInputs,
     build_manifest,
     build_report_artifacts,
     function_inventory_records_payload,
     function_inventory_summary_payload,
-    reset_audit_output,
+    publish_reports,
+    staging_paths,
     threshold_breached,
     write_debug_bundle_and_prune,
     write_report_artifacts,
@@ -43,6 +46,7 @@ from codeseam.pipeline.repository_enrichment import (
     build_repository_enrichment,
 )
 from codeseam.pipeline.semantics import (
+    SemanticStageRuntime,
     run_semantic_enrichment_stage,
     semantic_enrichment_stats,
 )
@@ -59,7 +63,8 @@ from codeseam.platform import (
     write_jsonable_atomic,
     write_jsonl_jsonable_atomic,
 )
-from codeseam.semantics import SemanticEnrichmentRun
+from codeseam.platform.storage import claim_storage_root
+from codeseam.semantics import SemanticEnrichmentRun, typescript_provider
 
 T = TypeVar("T")
 
@@ -74,6 +79,7 @@ class AnalysisRun:
     timings: Json
     signature_artifacts: SignatureArtifacts
     semantic_enrichment: SemanticEnrichmentRun
+    file_diagnostics: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -81,7 +87,6 @@ class AnalysisPipelineRequest:
     config: Config
     paths: OutputPaths
     progress: ProgressReporter
-    base_ref: str | None
     debug: bool = False
 
 
@@ -100,8 +105,12 @@ class _InventoryStage:
 
 @contextmanager
 def _analysis_cache(config: Config) -> Iterator[PersistentCache]:
-    cache_path = config.cache_path()
-    with file_locks(runtime_lock_paths(config.path("output", "root"), cache_path)):
+    output_root = config.output_root
+    cache_path = config.cache_path
+    with file_locks(runtime_lock_paths(output_root, cache_path)):
+        claim_storage_root(config.repo_root, output_root)
+        if config.cache_enabled:
+            claim_storage_root(config.repo_root, cache_path)
         cache = persistent_cache(cache_path, enabled=config.cache_enabled)
         try:
             yield cache
@@ -110,8 +119,19 @@ def _analysis_cache(config: Config) -> Iterator[PersistentCache]:
 
 
 def run_analysis_pipeline(request: AnalysisPipelineRequest) -> AnalysisRun:
+    """Analyse into a staging root and publish only a finished run.
+
+    A failure or Ctrl-C leaves the previous reports untouched.
+    """
+
     with _analysis_cache(request.config) as cache:
-        return _AnalysisPipeline(request, cache).run()
+        staging = staging_paths(request.paths)
+        try:
+            run = _AnalysisPipeline(replace(request, paths=staging), cache).run()
+            publish_reports(staging, request.paths)
+            return run
+        finally:
+            shutil.rmtree(staging.root, ignore_errors=True)
 
 
 class _AnalysisPipeline:
@@ -168,6 +188,7 @@ class _AnalysisPipeline:
             },
             signature_artifacts=signature_artifacts,
             semantic_enrichment=semantic_enrichment,
+            file_diagnostics=inventory_stage.file_analysis.diagnostics,
         )
 
     def _stage(self, name: str, fn: Callable[[], _StageResult[T]]) -> T:
@@ -177,7 +198,6 @@ class _AnalysisPipeline:
             return result.value
 
     def _prepare_output(self) -> _StageResult[None]:
-        reset_audit_output(self.paths)
         self.paths.ensure_audit(include_internal=self.request.debug)
         return _StageResult(
             None,
@@ -207,9 +227,9 @@ class _AnalysisPipeline:
         )
 
     def _cached_repository_facts(self, context: RepositoryScan) -> tuple[RepositoryFacts, str]:
-        if not self.config.cache_stage_enabled("repository_facts"):
+        if not self.config.cache_enabled:
             return build_repository_facts(context), ""
-        key = repository_facts_cache_key(context, self.config.data.get("selection", {}))
+        key = repository_facts_cache_key(context, self.config.selection)
         cached = cached_repository_facts(self.cache, key)
         if cached is not None:
             return cached, ", cache hit"
@@ -220,8 +240,8 @@ class _AnalysisPipeline:
     def _analyze_files(self, facts: RepositoryFacts) -> _StageResult[_InventoryStage]:
         caches = AnalysisCacheContext(
             persistent=self.cache,
-            file_analysis_enabled=self.config.cache_stage_enabled("file_analysis"),
-            relation_pair_enabled=self.config.cache_stage_enabled("relation_pairs"),
+            file_analysis_enabled=self.config.cache_enabled,
+            relation_pair_enabled=self.config.cache_enabled,
             language=LanguageRunCache(),
         )
         file_analysis = analyze_selected_files(
@@ -246,6 +266,7 @@ class _AnalysisPipeline:
                 pretty=True,
             )
         files_without_functions = len(inventory.files_without_function_units)
+        failed_files = len(file_analysis.diagnostics)
         return _StageResult(
             _InventoryStage(
                 caches=caches,
@@ -254,7 +275,8 @@ class _AnalysisPipeline:
             ),
             "Extracted function inventory: "
             f"{len(inventory.records)} functions found, "
-            f"{files_without_functions} files without functions",
+            f"{files_without_functions} files without functions, "
+            f"{failed_files} files failed extraction",
         )
 
     def _analyse_signatures(
@@ -271,7 +293,9 @@ class _AnalysisPipeline:
             inventory_stage.file_analysis.policy_constants,
         )
         if self.request.debug:
-            write_signature_artifacts(self.paths, signature_artifacts)
+            write_signature_artifacts(
+                self.paths, signature_artifacts.records, signature_artifacts.clusters
+            )
         return _StageResult(
             signature_artifacts,
             f"Analysed structural signatures: {len(signature_artifacts.records)} signatures",
@@ -284,22 +308,20 @@ class _AnalysisPipeline:
         repository_enrichment: RepositoryEnrichment,
         semantic_enrichment: SemanticEnrichmentRun,
     ) -> _StageResult[ReportArtifacts]:
-        manifest = build_manifest(
-            self.config,
-            scope="diff" if self.request.base_ref else "full",
-            base_ref=self.request.base_ref,
-            selected_file_count=facts.selected_file_count,
-        )
+        manifest = build_manifest(self.config, selected_file_count=facts.selected_file_count)
         write_jsonable_atomic(self.paths.artifact("manifest"), manifest, pretty=True)
         report_artifacts = build_report_artifacts(
-            self.config,
-            self.paths,
-            facts,
-            signature_artifacts,
-            manifest,
-            repository_enrichment,
-            semantic_enrichment,
-            debug=self.request.debug,
+            ReportInputs(
+                config=self.config,
+                paths=self.paths,
+                facts=facts,
+                clusters=signature_artifacts.clusters,
+                signatures=signature_artifacts.records,
+                manifest=manifest,
+                adapter_capabilities=repository_enrichment.adapter_capabilities,
+                semantic_enrichment=semantic_enrichment,
+                debug=self.request.debug,
+            )
         )
         write_report_artifacts(
             self.paths,
@@ -318,11 +340,17 @@ class _AnalysisPipeline:
         signature_artifacts: SignatureArtifacts,
         repository_enrichment: RepositoryEnrichment,
     ) -> _StageResult[SemanticEnrichmentRun]:
+        choice = typescript_provider(self.config.repo_root, trusted=self.config.trust_project_code)
         run = run_semantic_enrichment_stage(
             repo_root=str(self.config.repo_root),
             mode=self.config.semantic_mode,
             signature_artifacts=signature_artifacts,
             repository_enrichment=repository_enrichment,
+            runtime=SemanticStageRuntime(
+                provider=choice.provider,
+                cache=self.cache if self.config.cache_enabled else None,
+                unavailable_reason=choice.unavailable_reason,
+            ),
         )
         return _StageResult(
             run,

@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from codeseam.analysis.assessment.action import action_status_for, recommend_action
 from codeseam.analysis.assessment.classify import (
+    SummaryInputs,
     SurfacingAssessment,
     classify_review_tier,
     classify_visibility,
@@ -17,7 +18,6 @@ from codeseam.analysis.assessment.fit import score_abstraction_fit
 from codeseam.analysis.assessment.models import (
     AbstractionRisk,
     AssessmentBreakdown,
-    ContextClassification,
     ReviewAssessment,
 )
 from codeseam.analysis.assessment.payoff import score_maintenance_payoff
@@ -64,7 +64,6 @@ def assess_target(
     policy: AssessmentPolicy,
 ) -> Finding:
     roles = roles_for(draft.files, roles_by_path)
-    context = _primary_context(draft.context_classifications or ())
     relation_pairs = tuple(draft.structural_relation_pairs or ())
     kinds = tuple(draft.evidence_kinds or ())
     evidence = evidence_summary(
@@ -75,8 +74,8 @@ def assess_target(
     )
     risks = _effective_risks(
         abstraction_risks_from_values(draft.abstraction_risks),
-        relation_strong=draft.metrics.max_relation_confidence_score >= RELATION_STRONG_CONFIDENCE
-        and draft.metrics.max_refactorability_score >= RELATION_STRONG_REFACTORABILITY,
+        relation_strong=draft.metrics.lead_confidence_score >= RELATION_STRONG_CONFIDENCE
+        and draft.metrics.lead_refactorability_score >= RELATION_STRONG_REFACTORABILITY,
     )
     detection = score_detection_confidence(
         draft.metrics,
@@ -92,7 +91,7 @@ def assess_target(
         distinct_file_count=len(set(draft.files)),
         policy=policy,
     )
-    actions = _effective_actions(tuple(draft.refactor_action_candidates or ()), draft, context)
+    actions = _effective_actions(tuple(draft.refactor_action_candidates or ()), draft)
     action = recommend_action(
         actions,
         draft.refactor_action_summary,
@@ -104,20 +103,18 @@ def assess_target(
         evidence=evidence,
         policy=policy,
     )
-    refactor_value = context.refactor_value if context else payoff.band
+    refactor_value = payoff.band.value
     surfacing = SurfacingAssessment(
         action,
         detection=detection,
         fit=fit,
         risk=semantic_risk,
         payoff=payoff,
-        refactor_value=(
-            refactor_value.value if not isinstance(refactor_value, str) else refactor_value
-        ),
+        refactor_value=refactor_value,
         policy=policy,
     )
     review_score = review_attention_score(surfacing)
-    review_tier = classify_review_tier(surfacing, context=context)
+    review_tier = classify_review_tier(surfacing)
     action_status = action_status_for(action)
     cap = semantic_cap_for(draft.metrics, policy)
     capped = apply_semantic_cap(
@@ -127,8 +124,17 @@ def assess_target(
         cap=cap,
     )
     review_tier = capped.review_tier
-    visibility = classify_visibility(review_tier=review_tier, action=action, context=context)
-    eligible = summary_eligible(visibility, context)
+    visibility = classify_visibility(review_tier)
+    eligible = summary_eligible(
+        SummaryInputs(
+            review_tier=review_tier,
+            visibility=visibility,
+            payoff_band=payoff.band,
+            refactorability=fit.score,
+            action_status=capped.action_status,
+            primary_action=capped.primary_action,
+        )
+    )
     evidence_strength = _evidence_strength(evidence.classes, detection.score, fit.score)
     breakdown = AssessmentBreakdown(
         detection_confidence=detection,
@@ -148,12 +154,7 @@ def assess_target(
         evidence_classes=evidence.classes,
         breakdown=breakdown,
         rationale=_rationale(detection.score, fit.score, semantic_risk.score, payoff.score),
-        summary_reason=_summary_reason(
-            visibility,
-            capped.primary_action,
-            evidence_strength,
-            context,
-        ),
+        summary_reason=_summary_reason(visibility, capped.primary_action, evidence_strength),
     )
     decision = _target_decision(assessment)
     return Finding(
@@ -200,19 +201,9 @@ def assess_target(
         candidate_generation=draft.candidate_generation,
         refactor_action_candidates=actions,
         refactor_action_summary=draft.refactor_action_summary,
-        context_classifications=tuple(draft.context_classifications or ()),
-        finding_kind=context.kind if context else "",
-        context_tags=context.context_tags if context else (),
-        downgrade_reasons=tuple(
-            [
-                *(context.downgrade_reasons if context else ()),
-                *capped.downgrade_reasons,
-            ]
-        ),
+        downgrade_reasons=tuple(capped.downgrade_reasons),
         refactor_value=refactor_value,
-        refactor_safety=(
-            context.refactor_safety if context else _safety_label(semantic_risk.score, fit.cost)
-        ),
+        refactor_safety=_safety_label(semantic_risk.score, fit.cost),
         summary_reason=assessment.summary_reason,
     )
 
@@ -220,10 +211,7 @@ def assess_target(
 def _effective_actions(
     actions: tuple[RefactorAction, ...],
     draft: FindingDraft,
-    context: ContextClassification | None,
 ) -> tuple[RefactorAction, ...]:
-    if context is not None and context.action:
-        return actions
     if draft.metrics.cluster_scope != "same_language":
         return tuple(action for action in actions if action.kind in CROSS_LANGUAGE_ACTIONS)
     return actions
@@ -256,15 +244,6 @@ def _effective_risks(
     return tuple(risk for risk in risks if risk.kind != "small_commonality")
 
 
-def _primary_context(
-    classifications: Sequence[object],
-) -> ContextClassification | None:
-    return next(
-        (item for item in classifications if isinstance(item, ContextClassification)),
-        None,
-    )
-
-
 def _evidence_strength(
     classes: tuple[str, ...],
     detection_confidence: float,
@@ -289,10 +268,7 @@ def _summary_reason(
     visibility: FindingReviewVisibility,
     primary_action: ActionKind,
     evidence_strength: EvidenceStrength,
-    context: ContextClassification | None,
 ) -> str:
-    if context and context.downgrade_reasons:
-        return context.downgrade_reasons[0]
     if visibility is FindingReviewVisibility.GROUPED:
         return "Grouped because recurrence is visible but action confidence is limited."
     if visibility is FindingReviewVisibility.SIDECAR_ONLY:

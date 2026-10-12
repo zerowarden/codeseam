@@ -15,16 +15,14 @@ from codeseam.analysis import (
 
 
 @pytest.mark.parametrize(
-    "path",
-    (
-        "packages/app/integration-tests/models/page.ts",
-        "packages/server/src/utils/testing/apiUtils.ts",
-    ),
+    ("repository_role", "is_test"), [("test", True), ("fixture", True), ("source", False)]
 )
-def test_path_semantic_roles_classifies_test_topology_variants(path: str) -> None:
-    roles = path_semantic_roles(path, "source").roles
+def test_path_semantic_roles_take_test_code_from_the_repository_role(
+    repository_role: str, is_test: bool
+) -> None:
+    roles = path_semantic_roles("app/contests.py", repository_role).roles
 
-    assert FunctionSemanticRole.TEST_CODE in roles
+    assert (FunctionSemanticRole.TEST_CODE in roles) is is_test
 
 
 def test_generic_path_semantic_roles_do_not_know_ecmascript_tooling_names() -> None:

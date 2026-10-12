@@ -92,6 +92,12 @@ def json_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def is_count(value: object) -> bool:
+    """A non-negative int; `bool` is an `int` subclass but never a count."""
+
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def json_int(value: object, default: int = 0) -> int:
     if isinstance(value, int | float):
         return int(value)

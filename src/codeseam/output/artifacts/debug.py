@@ -2,32 +2,47 @@ from __future__ import annotations
 
 import gzip
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from codeseam.platform import ArtifactVisibility, OutputPaths, dumps_jsonable_stable, sha256_bytes
 
+STAGING_DIR = ".staging"
 
-def reset_audit_output(paths: OutputPaths) -> None:
-    for directory in (
-        paths.directory("agent"),
-        paths.directory("raw"),
-        paths.directory("context"),
-    ):
-        if directory.exists():
-            shutil.rmtree(directory)
-    legacy_normalized = paths.root / "normalized"
-    if legacy_normalized.exists():
-        shutil.rmtree(legacy_normalized)
-    legacy_evidence = paths.root / "evidence"
-    if legacy_evidence.exists():
-        shutil.rmtree(legacy_evidence)
-    legacy_bundle = paths.root / "evidence.jsonl.gz"
-    if legacy_bundle.exists():
-        legacy_bundle.unlink()
-    bundle = paths.artifact("debug_bundle")
-    if bundle.exists():
-        bundle.unlink()
-    _remove_internal_artifacts(paths)
+
+def staging_paths(paths: OutputPaths) -> OutputPaths:
+    """A fresh staging root inside the (ownership-checked) output root."""
+
+    staging = OutputPaths(paths.root / STAGING_DIR)
+    if staging.root.exists():
+        shutil.rmtree(staging.root)
+    return staging
+
+
+def publish_reports(staging: OutputPaths, paths: OutputPaths) -> None:
+    """Replace the previous run's reports with a finished run's, entry by entry.
+
+    Only artifact entries are touched, so anything else in the output root (the
+    ownership marker, a cache configured inside it) survives. A run that fails
+    before this point leaves the previous reports in place.
+    """
+
+    paths.ensure_phase0()
+    for name in sorted(_artifact_entry_names(paths)):
+        old, new = paths.root / name, staging.root / name
+        if old.is_dir() and not old.is_symlink():
+            shutil.rmtree(old)
+        elif old.exists() or old.is_symlink():
+            old.unlink()
+        if new.exists():
+            new.replace(old)
+
+
+def _artifact_entry_names(paths: OutputPaths) -> set[str]:
+    relpaths = [
+        *paths.artifact_refs(ArtifactVisibility.PUBLIC).values(),
+        *paths.artifact_refs(ArtifactVisibility.INTERNAL).values(),
+    ]
+    return {PurePosixPath(relpath).parts[0] for relpath in relpaths}
 
 
 def write_debug_bundle_and_prune(

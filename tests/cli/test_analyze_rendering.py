@@ -40,7 +40,7 @@ def test_analyze_threshold_breach_detection() -> None:
             payload={
                 "evidence_classes": [
                     "anti_unification_template",
-                    "body_tree_similarity",
+                    "body_structure_similarity",
                 ],
                 "locations": [
                     {
@@ -54,7 +54,7 @@ def test_analyze_threshold_breach_detection() -> None:
             expected=(
                 "Top review required:",
                 "review required  rt_review",
-                "Reasons: Common code skeleton, similar body tree",
+                "Reasons: Common code skeleton, similar body structure",
                 "Action: Consolidate clone; maintenance payoff: medium",
                 "src/helper.py:10-12::build_helper",
             ),
@@ -72,19 +72,6 @@ def test_analyze_threshold_breach_detection() -> None:
             },
             expected=(),
             absent=("Top review required:", "rt_sidecar"),
-        ),
-        AnalyzeOutputCase(
-            id="listed-low-value-target",
-            payload={
-                "target_id": "rt_low_value",
-                "title": "Low-value test helper recurrence",
-                "refactor_value": "low",
-                "refactorability_score": 0.2,
-                "summary_eligible": True,
-                "visibility": "listed",
-            },
-            expected=(),
-            absent=("Top review required:", "rt_low_value"),
         ),
         AnalyzeOutputCase(
             id="colored-location",
@@ -195,3 +182,23 @@ def test_analyze_prints_review_tier_labels_from_summary(
             REVIEW_TIER_LABELS[ReviewTier.REVIEW_CANDIDATE],
         ],
     )
+
+
+def test_color_never_emits_plain_text_even_when_color_is_forced(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FORCE_COLOR", "3")
+    payload = analysis_payload_for_review_target(
+        tmp_path,
+        target_id="rt_fix",
+        review_tier=ReviewTier.RECOMMENDED_EDIT,
+    )
+    payload["timings"] = {"elapsed_seconds": 0.01}
+
+    render_analyze_result(payload, output_options(color="never"))
+
+    output = capsys.readouterr().out
+    assert "recommended edits  rt_fix" in output
+    assert "\x1b[" not in output

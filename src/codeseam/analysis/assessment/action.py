@@ -184,7 +184,7 @@ def _preconditions(  # noqa: PLR0913
             failed,
             AssessmentGate.MAINTENANCE_PAYOFF,
             payoff.score >= policy.review_candidate_threshold
-            or _substantial_intra_function_duplicate(metrics)
+            or _substantial_duplicate_block(metrics)
             or (
                 action is ActionKind.CONSOLIDATE_CLONE
                 and has_editable_parameterized_skeleton_relation(metrics, policy)
@@ -261,7 +261,7 @@ def _consolidate_clone_preconditions(  # noqa: PLR0913
         failed,
         AssessmentGate.BODY_HASH_OR_NEAR_IDENTICAL_TREE,
         metrics.body_hash_match_count > 0
-        or metrics.max_tree_similarity >= NEAR_IDENTICAL_TREE_SIMILARITY,
+        or metrics.lead_tree_similarity >= NEAR_IDENTICAL_TREE_SIMILARITY,
     )
     _check(passed, failed, AssessmentGate.LOW_SEMANTIC_RISK, risk.score <= LOW_CLONE_RISK)
     _check(passed, failed, AssessmentGate.LOW_ABSTRACTION_COST, fit.cost <= CLEAN_CLONE_COST)
@@ -277,14 +277,14 @@ def _extract_small_helper_preconditions(  # noqa: PLR0913
     risk: SemanticRisk,
     fit: AbstractionFit,
 ) -> None:
-    local_duplicate = _has_intra_function_duplicate(metrics)
+    local_duplicate = _has_duplicate_block(metrics)
     if local_duplicate:
         passed.append(AssessmentGate.INTRA_FUNCTION_DUPLICATE_BLOCK)
     _check(
         passed,
         failed,
         AssessmentGate.SUBSTANTIAL_LOCAL_DUPLICATE_BLOCK,
-        not local_duplicate or _substantial_intra_function_duplicate(metrics),
+        not local_duplicate or _substantial_duplicate_block(metrics),
     )
     _check(
         passed,
@@ -379,13 +379,13 @@ def _introduce_abstraction_preconditions(  # noqa: PLR0913
         passed,
         failed,
         AssessmentGate.LOW_HOLE_COUNT,
-        hole_metrics_available and metrics.max_hole_count <= MAX_INTRODUCTION_HOLES,
+        hole_metrics_available and metrics.lead_hole_count <= MAX_INTRODUCTION_HOLES,
     )
     _check(
         passed,
         failed,
         AssessmentGate.LOW_HOLE_COMPLEXITY,
-        hole_metrics_available and metrics.max_hole_size <= MAX_LOW_COMPLEXITY_HOLE_SIZE,
+        hole_metrics_available and metrics.lead_hole_size <= MAX_LOW_COMPLEXITY_HOLE_SIZE,
     )
     _check(
         passed,
@@ -476,7 +476,7 @@ def _status(  # noqa: PLR0911, PLR0913
         return RecommendationStatus.RECOMMENDED
     if (
         action is ActionKind.EXTRACT_SMALL_HELPER
-        and _substantial_intra_function_duplicate(metrics)
+        and _substantial_duplicate_block(metrics)
         and risk.score <= LOW_HELPER_RISK
         and fit.cost <= LOW_PUBLIC_API_COST
     ):
@@ -512,13 +512,13 @@ def _action_preconditions(
     return tuple(values)
 
 
-def _has_intra_function_duplicate(metrics: FindingMetrics) -> bool:
-    return metrics.intra_function_duplicate_block_count > 0
+def _has_duplicate_block(metrics: FindingMetrics) -> bool:
+    return metrics.duplicate_block_count > 0
 
 
-def _substantial_intra_function_duplicate(metrics: FindingMetrics) -> bool:
+def _substantial_duplicate_block(metrics: FindingMetrics) -> bool:
     return (
-        _has_intra_function_duplicate(metrics)
+        _has_duplicate_block(metrics)
         and metrics.max_body_line_count >= MIN_LOCAL_DUPLICATE_HELPER_LINES
     )
 
@@ -535,7 +535,7 @@ def _mixed_role_semantics(metrics: FindingMetrics) -> bool:
 
 
 def _common_region_size(metrics: FindingMetrics) -> float:
-    return float(metrics.max_stable_statement_count)
+    return float(metrics.lead_stable_statement_count)
 
 
 def _hole_metrics_available(
@@ -544,8 +544,8 @@ def _hole_metrics_available(
 ) -> bool:
     return (
         evidence.has(EVIDENCE_ANTI_UNIFICATION_TEMPLATE)
-        or metrics.max_hole_count > 0
-        or metrics.max_hole_size > 0
+        or metrics.lead_hole_count > 0
+        or metrics.lead_hole_size > 0
     )
 
 

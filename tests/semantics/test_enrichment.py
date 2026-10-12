@@ -11,25 +11,11 @@ from codeseam.semantics import (
     SemanticProjectSummary,
     SemanticProviderMetadata,
     SemanticProviderStatus,
-    semantic_mode,
     semantic_provider_status,
 )
 
 BYTE_START = 10
 BYTE_END = 80
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (SemanticMode.AUTO, SemanticMode.AUTO),
-        ("project", SemanticMode.PROJECT),
-        ("missing", SemanticMode.OFF),
-        (None, SemanticMode.OFF),
-    ],
-)
-def test_semantic_mode_is_generic_and_safe(value: object, expected: SemanticMode) -> None:
-    assert semantic_mode(value) is expected
 
 
 @pytest.mark.parametrize(

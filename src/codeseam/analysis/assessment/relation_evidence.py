@@ -49,13 +49,13 @@ def has_editable_parameterized_skeleton_relation(
         has_parameterized_skeleton_relation(metrics)
         and metrics.same_role_relation_count > 0
         and metrics.same_directory_relation_count > 0
-        and metrics.max_tree_similarity
+        and metrics.lead_tree_similarity
         >= relation_policy.parameterized_skeleton_min_tree_similarity
-        and metrics.max_refactorability_score
+        and metrics.lead_refactorability_score
         >= relation_policy.parameterized_skeleton_min_refactorability
-        and metrics.max_abstraction_cost_score
+        and metrics.lead_abstraction_cost_score
         <= relation_policy.parameterized_skeleton_max_abstraction_cost
-        and metrics.max_relation_risk_score <= relation_policy.parameterized_skeleton_max_risk
+        and metrics.lead_risk_score <= relation_policy.parameterized_skeleton_max_risk
     )
 
 

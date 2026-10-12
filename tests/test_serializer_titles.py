@@ -14,7 +14,7 @@ from codeseam.platform import Json
 def test_display_title_uses_literal_duplicate_symbol() -> None:
     target = _target(
         symbols=["fake_write_bot_match_review"],
-        evidence_classes=["anti_unification_template", "body_tree_similarity"],
+        evidence_classes=["anti_unification_template", "body_structure_similarity"],
     )
 
     assert display_title(target) == "Duplicate helper fake_write_bot_match_review"
@@ -23,7 +23,7 @@ def test_display_title_uses_literal_duplicate_symbol() -> None:
 def test_display_title_uses_shared_symbol_tokens() -> None:
     target = _target(
         symbols=["_mulligan_score", "_selection_score"],
-        evidence_classes=["anti_unification_template", "body_tree_similarity"],
+        evidence_classes=["anti_unification_template", "body_structure_similarity"],
     )
 
     assert display_title(target) == "Duplicate score helpers"
@@ -32,7 +32,7 @@ def test_display_title_uses_shared_symbol_tokens() -> None:
 def test_display_title_falls_back_to_structural_clone_title() -> None:
     target = _target(
         symbols=["_summarize_action", "_render_event"],
-        evidence_classes=["body_tree_similarity"],
+        evidence_classes=["body_structure_similarity"],
     )
 
     assert display_title(target) == "Duplicate helpers with similar structure"
@@ -49,9 +49,10 @@ def test_display_title_uses_evidence_specific_titles() -> None:
                 symbols=["MAX_RETRIES"],
                 evidence_classes=["policy_constant_duplicate"],
                 primary_action="introduce_abstraction",
+                title="Drifted policy constant MAX_RETRIES",
             )
         )
-        == "Duplicated policy constant MAX_RETRIES"
+        == "Drifted policy constant MAX_RETRIES"
     )
 
 
@@ -60,22 +61,24 @@ def test_display_reason_and_shape_are_compact() -> None:
         title="Shared signature shape fn(str)->bool",
         evidence_classes=[
             "anti_unification_template",
-            "body_tree_similarity",
+            "body_structure_similarity",
             "local_dataflow_similarity",
             "signature_shape",
         ],
     )
 
     assert display_shape(target["title"]) == "fn(str)->bool"
-    assert display_reason(target) == "common code skeleton, similar body tree, similar data flow"
+    assert display_reason(target) == (
+        "common code skeleton, similar body structure, similar data flow"
+    )
 
 
 def test_display_reason_label_uses_plural_for_multiple_reasons() -> None:
     assert display_reason_label({"reason": "common code skeleton"}) == "Reason"
-    assert display_reason_label({"reason": "common code skeleton, similar body tree"}) == "Reasons"
-    assert display_reason_label({"reasons": ["common code skeleton", "similar body tree"]}) == (
-        "Reasons"
-    )
+    reason = "common code skeleton, similar body structure"
+    assert display_reason_label({"reason": reason}) == "Reasons"
+    reasons = ["common code skeleton", "similar body structure"]
+    assert display_reason_label({"reasons": reasons}) == "Reasons"
 
 
 def test_display_sentence_and_action_title_are_human_readable() -> None:

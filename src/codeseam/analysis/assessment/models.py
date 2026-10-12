@@ -9,12 +9,10 @@ from codeseam.analysis.assessment.definitions import (
     EvidenceStrength,
     FindingActionStatus,
     FindingReviewVisibility,
-    FindingVisibility,
     RecommendationStatus,
     ReviewTier,
 )
 from codeseam.analysis.relations.models import ActionKind
-from codeseam.analysis.signatures import BoundarySpecificity
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,22 +91,6 @@ class ActionAssessment:
 
 
 @dataclass(frozen=True, slots=True)
-class ContextClassification:
-    kind: str
-    context_tags: tuple[str, ...]
-    visibility: FindingVisibility
-    summary_eligible: bool
-    action: ActionKind
-    refactor_value: str
-    refactor_safety: str
-    downgrade_reasons: tuple[str, ...]
-    review_tier: ReviewTier | None = None
-    evidence_strength: EvidenceStrength = EvidenceStrength.NONE
-    boundary_specificity: BoundarySpecificity | None = None
-    corroborating_signals: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class AssessmentBreakdown:
     detection_confidence: DetectionConfidence
     abstraction_fit: AbstractionFit
@@ -137,7 +119,6 @@ __all__ = [
     "AbstractionRisk",
     "ActionAssessment",
     "AssessmentBreakdown",
-    "ContextClassification",
     "DetectionConfidence",
     "EvidenceSummary",
     "MaintenancePayoff",

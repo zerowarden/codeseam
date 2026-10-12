@@ -24,8 +24,12 @@ from codeseam.semantics import (
     SemanticProviderMetadata,
     SemanticProviderRequiredError,
     SemanticProviderStatus,
+    StdioSemanticProvider,
     run_semantic_enrichment,
+    typescript_provider,
+    typescript_worker_script,
 )
+from codeseam.semantics.worker import NODE_MISSING_REASON, UNTRUSTED_REASON
 
 EXPECTED_PROVIDER_CALLS = 2
 
@@ -249,3 +253,32 @@ def _request(
             ),
         ),
     )
+
+
+def test_untrusted_repositories_never_start_the_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: pytest.fail("looked for node"))
+
+    choice = typescript_provider(tmp_path, trusted=False)
+
+    assert choice.provider is None
+    assert choice.unavailable_reason == UNTRUSTED_REASON
+
+
+def test_trusted_repositories_need_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    assert typescript_provider(tmp_path, trusted=True).unavailable_reason == NODE_MISSING_REASON
+
+
+def test_trusted_repositories_run_the_packaged_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/node")
+
+    provider = typescript_provider(tmp_path, trusted=True).provider
+
+    assert isinstance(provider, StdioSemanticProvider)
+    assert provider.command == ("/usr/bin/node", str(typescript_worker_script()))
+    assert typescript_worker_script().is_file()

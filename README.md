@@ -122,8 +122,8 @@ Run `codeseam init`
 - Code quality scanner
 - Automated refactoring tool
 
-## Methodology
-See [METHODOLOGY](./docs/METHODOLOGY.md)
+## Documentation
+See [the documentation](./docs/README.md). Start with [Getting started](./docs/getting-started.md). For how Codeseam decides, read [Methodology](./docs/methodology.md).
 
 ## License
 MIT

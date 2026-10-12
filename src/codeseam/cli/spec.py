@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 from typing import Any
 
 from codeseam.cli.constants import ANALYZE_FORMATS, DEFAULT_PAIR_LIMIT, DEFAULT_TARGET_LIMIT
+from codeseam.semantics import SemanticMode
 
 type ArgumentSpec = dict[str, Any]
 type CommandSpec = dict[str, Any]
@@ -35,20 +37,9 @@ def command_specs() -> dict[str, CommandSpec]:
                 {"names": ("path",), "nargs": "?", "help": "Repository path to analyze."},
                 {"names": ("--repo-root",), "help": "Repository root override."},
                 {
-                    "names": ("--base",),
-                    "dest": "base_ref",
-                    "help": "Base git ref for changed-file scope.",
-                },
-                {"names": ("--since",), "dest": "base_ref", "help": "Alias for --base."},
-                {
-                    "names": ("--strict",),
-                    "action": "store_true",
-                    "help": "Exit non-zero on high findings.",
-                },
-                {
                     "names": ("--ci",),
                     "action": "store_true",
-                    "help": "Run in CI mode: JSON output, no color, no progress, compact logs.",
+                    "help": "Run in CI mode: CI summary and exit policy, no color, no progress.",
                 },
                 {
                     "names": ("--debug",),
@@ -57,7 +48,15 @@ def command_specs() -> dict[str, CommandSpec]:
                 },
                 {
                     "names": ("--semantic-mode",),
-                    "choices": ("off", "auto", "project", "required"),
+                    "choices": tuple(
+                        mode.value
+                        for mode in (
+                            SemanticMode.OFF,
+                            SemanticMode.AUTO,
+                            SemanticMode.PROJECT,
+                            SemanticMode.REQUIRED,
+                        )
+                    ),
                     "help": "Optional semantic provider mode.",
                 },
                 {
@@ -154,3 +153,9 @@ def command_specs() -> dict[str, CommandSpec]:
             },
         },
     }
+
+
+def add_arguments(parser: argparse.ArgumentParser, arguments: tuple[ArgumentSpec, ...]) -> None:
+    for spec in arguments:
+        names = tuple(spec["names"])
+        parser.add_argument(*names, **{key: value for key, value in spec.items() if key != "names"})

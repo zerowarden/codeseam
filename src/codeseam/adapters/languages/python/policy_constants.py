@@ -26,7 +26,8 @@ def extract_policy_constants(
         name, value = _constant_assignment(node)
         if not name or value is None or not _is_policy_constant_name(name):
             continue
-        if not _structured_policy_literal_items(value):
+        items = _structured_policy_literal_items(value)
+        if not items:
             continue
         literal_shape = dump_ast_shape(value)
         constants.append(
@@ -41,6 +42,7 @@ def extract_policy_constants(
                 literal_kind=type(value).__name__,
                 literal_shape_hash=sha256_text(literal_shape),
                 literal_preview=unparse_preview(value, PREVIEW_LIMIT),
+                literal_items=_canonical_items(value, items),
             )
         )
     return constants
@@ -83,6 +85,16 @@ def _structured_policy_literal_items(value: ast.AST) -> tuple[ast.AST, ...]:
     ):
         return ()
     return items
+
+
+def _canonical_items(value: ast.AST, items: tuple[ast.AST, ...]) -> tuple[str, ...]:
+    if isinstance(value, ast.Dict):
+        return tuple(
+            f"{dump_ast_shape(key)}:{dump_ast_shape(item)}"
+            for key, item in zip(value.keys, value.values, strict=True)
+            if key is not None
+        )
+    return tuple(dump_ast_shape(item) for item in items)
 
 
 def _is_simple_literal(node: ast.AST) -> bool:

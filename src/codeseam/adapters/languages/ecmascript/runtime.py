@@ -24,9 +24,13 @@ class TreeSitterRuntime:
 
 
 def iter_named_nodes(node: Node) -> Iterable[Node]:
-    yield node
-    for child in node.named_children:
-        yield from iter_named_nodes(child)
+    """Pre-order named nodes, iteratively so deeply nested code cannot overflow the stack."""
+
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(reversed(current.named_children))
 
 
 def node_text(source: bytes, node: Node | None) -> str | None:

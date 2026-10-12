@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-from collections import defaultdict
 from pathlib import Path
 from textwrap import dedent
 from typing import cast
@@ -13,9 +12,10 @@ from codeseam.adapters.languages.python.analysis import (
     parse_python,
 )
 from codeseam.adapters.languages.python.ast_utils import (
-    ClassStackVisitor,
+    iter_scoped_definitions,
     unparse_ast,
 )
+from codeseam.adapters.languages.python.callsites import callsite_patterns
 from codeseam.adapters.languages.python.duplicate_blocks import (
     python_intra_function_duplicate_blocks,
 )
@@ -24,23 +24,19 @@ from codeseam.adapters.languages.python.semantic_roles import classify_python_se
 from codeseam.adapters.languages.python.signature_features import operation_features
 from codeseam.analysis import (
     AdapterId,
-    CallsitePattern,
     EvidenceKind,
     FunctionRecord,
     LanguageFamily,
     SignatureAnalysisFeatures,
     SignatureRecord,
-    SignatureTypeSource,
+    annotated_shape,
     callsite_evidence_kinds,
-    canonical_shape,
     is_callable_return,
 )
 from codeseam.platform import normalize_identifier
 
 UNKNOWN = "UNKNOWN"
 LANGUAGE_FAMILY = LanguageFamily.PYTHON
-PIPELINE_CALL_NAMES = {"filter", "map", "reduce", "sorted", "pipe", "then"}
-REGISTER_CALL_TOKENS = ("add", "handler", "on", "register", "route", "use")
 
 
 def extract_python_analysis(
@@ -51,10 +47,11 @@ def extract_python_analysis(
     analysis: PythonAnalysis | None = None,
 ) -> LanguageAdapterAnalysis:
     parsed = analysis or parse_python(path)
-    if parsed.syntax_error:
+    if error := parsed.syntax_error:
         return LanguageAdapterAnalysis(
-            functions=(_function_parse_error(file_path, role, language, parsed.syntax_error),),
-            signatures=(_parse_error(file_path, role, language, parsed.syntax_error),),
+            functions=(),
+            signatures=(),
+            diagnostics=(f"python_parse_error: {error.msg} (line {max(1, error.lineno or 1)})",),
         )
     if parsed.tree is None:
         return LanguageAdapterAnalysis(functions=(), signatures=())
@@ -112,12 +109,11 @@ def _top_level_function(
 def function_node_index(
     tree: ast.AST,
 ) -> dict[tuple[str, int], PythonFunctionNode]:
-    index: dict[tuple[str, int], PythonFunctionNode] = {}
-    for node in ast.walk(tree):
-        if type(node) in {ast.FunctionDef, ast.AsyncFunctionDef}:
-            function = cast(PythonFunctionNode, node)
-            index[(function.name, function.lineno)] = function
-    return index
+    return {
+        (node.name, node.lineno): node
+        for node, _ in iter_scoped_definitions(tree)
+        if not isinstance(node, ast.ClassDef)
+    }
 
 
 def _relation_detail_from_function(
@@ -135,36 +131,39 @@ def _relation_detail_from_function(
         parameter_features=compact.parameter_features,
         normalization_transform_tokens=frozenset(compact.normalization_transform_tokens),
         statement_arg_reads=compact.statement_arg_reads,
+        body_tree=compact.body_tree,
     )
 
 
-class _Visitor(ClassStackVisitor[SignatureRecord]):
+class _Visitor:
     def __init__(self, file_path: str, role: str, language: str, lines: list[str]) -> None:
         self.file_path = file_path
         self.role = role
         self.language = language
         self.lines = lines
-        self.stack: list[str] = []
         self.records: list[SignatureRecord] = []
         self.function_records: list[FunctionRecord] = []
         self.function_nodes: dict[tuple[str, int], PythonFunctionNode] = {}
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._visit_function(node, is_async=False)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._visit_function(node, is_async=True)
+    def collect(self, tree: ast.AST) -> list[SignatureRecord]:
+        for node, scope in iter_scoped_definitions(tree):
+            if not isinstance(node, ast.ClassDef):
+                self._visit_function(
+                    node, is_async=isinstance(node, ast.AsyncFunctionDef), container=".".join(scope)
+                )
+        return self.records
 
     def _visit_function(
         self,
         node: ast.FunctionDef | ast.AsyncFunctionDef,
         *,
         is_async: bool,
+        container: str,
     ) -> None:
-        params = [_annotation(arg.annotation) for arg in _args(node.args)]
+        params = _parameter_types(node.args)
         self.function_nodes[(node.name, node.lineno)] = node
         return_type = _annotation(node.returns)
-        shape, shape_hash = canonical_shape(params, return_type)
+        signature = annotated_shape(params, return_type)
         end_line = int(getattr(node, "end_lineno", node.lineno))
         body_line_count = end_line - node.lineno + 1
         source = "\n".join(self.lines[node.lineno - 1 : end_line])
@@ -174,7 +173,7 @@ class _Visitor(ClassStackVisitor[SignatureRecord]):
                 language=self.language,
                 file=self.file_path,
                 symbol=node.name,
-                container=".".join(self.stack) or None,
+                container=container or None,
                 start_line=node.lineno,
                 end_line=end_line,
                 is_exported_or_public=not node.name.startswith("_"),
@@ -203,22 +202,24 @@ class _Visitor(ClassStackVisitor[SignatureRecord]):
                 file=self.file_path,
                 symbol=node.name,
                 normalized_symbol=normalize_identifier(node.name),
-                container=".".join(self.stack) or None,
+                container=container or None,
                 start_line=node.lineno,
                 end_line=end_line,
                 role=self.role,
-                type_source=SignatureTypeSource.DECLARED_SYNTAX,
+                type_source=signature.type_source,
                 parameters=params,
                 return_type=return_type,
                 raw_signature=f"def {node.name}({','.join(params)}) -> {return_type}",
-                canonical_shape=shape,
-                shape_hash=shape_hash,
+                canonical_shape=signature.canonical_shape,
+                shape_hash=signature.shape_hash,
                 body_line_count=body_line_count,
                 body_shape="",
                 body_shape_hash=features.compact.body_shape_hash,
                 body_tree=None,
                 body_tree_node_count=tree_node_count,
                 statement_sequence=list(features.compact.statement_sequence),
+                statement_keys=features.compact.statement_keys,
+                statement_spans=features.compact.statement_spans,
                 call_tokens=features.compact.call_tokens,
                 call_fingerprints=features.flow.call_fingerprints,
                 parameter_use_vectors=dict(features.flow.parameter_use_vectors),
@@ -231,19 +232,31 @@ class _Visitor(ClassStackVisitor[SignatureRecord]):
                 normalization_transform_tokens=features.compact.normalization_transform_tokens,
                 statement_arg_reads=features.compact.statement_arg_reads,
                 control_context_vector=list(features.compact.control_context_vector),
-                caveats=[] if UNKNOWN not in [*params, return_type] else ["missing_annotations"],
+                caveats=signature.caveats,
                 semantic_roles=semantic_roles.roles,
                 semantic_role_reasons=semantic_roles.reasons,
                 intra_function_duplicate_blocks=python_intra_function_duplicate_blocks(node),
             )
         )
-        self.stack.append(node.name)
-        self.generic_visit(node)
-        self.stack.pop()
 
 
-def _args(args: ast.arguments) -> list[ast.arg]:
-    return [*args.posonlyargs, *args.args, *args.kwonlyargs]
+def _parameter_types(args: ast.arguments) -> list[str]:
+    """Declared types in call order; `*xs: T` is `list[T]` and `**kw: T` is `dict[str, T]`.
+
+    TypeScript writes a rest parameter as `...xs: T[]`, so both shapes agree.
+    """
+
+    def variadic(arg: ast.arg | None, template: str) -> list[str]:
+        if arg is None:
+            return []
+        return [template.format(_annotation(arg.annotation)) if arg.annotation else UNKNOWN]
+
+    return [
+        *(_annotation(arg.annotation) for arg in [*args.posonlyargs, *args.args]),
+        *variadic(args.vararg, "list[{}]"),
+        *(_annotation(arg.annotation) for arg in args.kwonlyargs),
+        *variadic(args.kwarg, "dict[str, {}]"),
+    ]
 
 
 def _parameter_count(args: ast.arguments) -> int:
@@ -260,195 +273,17 @@ def _annotation(node: ast.AST | None) -> str:
     return unparse_ast(node, UNKNOWN)
 
 
-def _parse_error(
-    file_path: str,
-    role: str,
-    language: str,
-    exc: SyntaxError,
-) -> SignatureRecord:
-    line = max(1, exc.lineno or 1)
-    shape, shape_hash = canonical_shape([UNKNOWN], UNKNOWN)
-    return SignatureRecord(
-        language=language,
-        language_family=LANGUAGE_FAMILY,
-        adapter=AdapterId.PYTHON_AST,
-        file=file_path,
-        symbol="<parse_error>",
-        normalized_symbol="parse error",
-        container=None,
-        start_line=line,
-        end_line=line,
-        role=role,
-        type_source=SignatureTypeSource.UNKNOWN,
-        parameters=[UNKNOWN],
-        return_type=UNKNOWN,
-        raw_signature="",
-        canonical_shape=shape,
-        shape_hash=shape_hash,
-        body_line_count=0,
-        body_shape="",
-        body_shape_hash="",
-        body_tree=None,
-        body_tree_node_count=0,
-        caveats=[f"python_parse_error: {exc.msg}"],
-    )
-
-
-def _function_parse_error(
-    file_path: str,
-    role: str,
-    language: str,
-    exc: SyntaxError,
-) -> FunctionRecord:
-    line = max(1, exc.lineno or 1)
-    return FunctionRecord(
-        language=language,
-        file=file_path,
-        symbol="<parse_error>",
-        container=None,
-        start_line=line,
-        end_line=line,
-        is_exported_or_public=False,
-        is_async=False,
-        parameter_count=0,
-        branch_count=0,
-        loop_count=0,
-        return_count=0,
-        max_nesting=0,
-        role=role,
-        source="",
-        caveats=[f"python_parse_error: {exc.msg}"],
-        extraction_confidence="low",
-    )
-
-
 def _attach_callsite_evidence(tree: ast.AST, records: list[SignatureRecord]) -> None:
     factories = {record.symbol for record in records if is_callable_return(record.return_type)}
     if not factories:
         return
-    file_path = records[0].file if records else ""
-    visitor = _CallsiteVisitor(factories, file_path)
-    visitor.visit(tree)
-    patterns_by_symbol = visitor.patterns_by_symbol()
+    patterns_by_symbol = callsite_patterns(tree, frozenset(factories), records[0].file)
     for record in records:
         symbol = record.symbol
         if symbol not in factories:
             continue
-        patterns = patterns_by_symbol.get(symbol, [])
+        patterns = patterns_by_symbol.get(symbol, ())
         evidence_kinds = [EvidenceKind.CALLABLE_FACTORY, *callsite_evidence_kinds(patterns)]
         record.is_callable_factory = True
         record.evidence_kinds = sorted(dict.fromkeys(evidence_kinds))
         record.callsite_patterns = tuple(patterns)
-
-
-class _CallsiteVisitor(ast.NodeVisitor):
-    def __init__(self, factories: set[str], file_path: str) -> None:
-        self.factories = factories
-        self.file_path = file_path
-        self.patterns: dict[str, list[CallsitePattern]] = defaultdict(list)
-        self.assigned: dict[str, tuple[str, int]] = {}
-        self.call_counts: dict[str, int] = defaultdict(int)
-
-    def patterns_by_symbol(self) -> dict[str, list[CallsitePattern]]:
-        for variable, (symbol, line) in self.assigned.items():
-            if self.call_counts[variable] > 1:
-                self._add(
-                    symbol,
-                    EvidenceKind.CALLSITE_STORED_REUSE,
-                    line,
-                    variable=variable,
-                    call_count=self.call_counts[variable],
-                )
-        return {
-            symbol: sorted(
-                patterns,
-                key=lambda item: (item.line, item.kind),
-            )
-            for symbol, patterns in self.patterns.items()
-        }
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        if symbol := self._factory_symbol(node.value):
-            for target in node.targets:
-                if name := _node_name(target, tuple_target=True):
-                    self.assigned[name] = (symbol, node.lineno)
-                if _is_cache_target(target):
-                    self._add(symbol, EvidenceKind.CALLSITE_CACHED, node.lineno)
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        if type(node.func) is ast.Call:
-            if symbol := self._factory_symbol(node.func):
-                self._add(symbol, EvidenceKind.CALLSITE_IMMEDIATE, node.lineno)
-        if name := _node_name(node.func, attribute=True):
-            if name in self.assigned:
-                self.call_counts[name] += 1
-        for arg in node.args:
-            if symbol := self._factory_symbol(arg):
-                kind = (
-                    EvidenceKind.CALLSITE_PIPELINE
-                    if _is_pipeline_call(node)
-                    else EvidenceKind.CALLSITE_REGISTERED
-                )
-                if kind == EvidenceKind.CALLSITE_REGISTERED and not _is_register_call(node):
-                    continue
-                self._add(symbol, kind, node.lineno)
-        self.generic_visit(node)
-
-    def _factory_symbol(self, node: ast.AST) -> str | None:
-        if type(node) is not ast.Call:
-            return None
-        name = _node_name(node.func, attribute=True)
-        return name if name in self.factories else None
-
-    def _add(self, symbol: str, kind: str, line: int, **extra: object) -> None:
-        variable = str(extra.get("variable", ""))
-        item = CallsitePattern(
-            kind=kind,
-            symbol=symbol,
-            file=self.file_path,
-            line=line,
-            variable=variable,
-        )
-        if item not in self.patterns[symbol]:
-            self.patterns[symbol].append(item)
-
-
-def _node_name(
-    node: ast.AST,
-    *,
-    attribute: bool = False,
-    tuple_target: bool = False,
-) -> str | None:
-    node_type = type(node)
-    if node_type is ast.Name:
-        return cast(ast.Name, node).id
-    if attribute and node_type is ast.Attribute:
-        return cast(ast.Attribute, node).attr
-    if tuple_target and node_type is ast.Tuple:
-        names = [_node_name(item, tuple_target=True) for item in cast(ast.Tuple, node).elts]
-        return next((name for name in names if name), None)
-    return None
-
-
-def _is_cache_target(node: ast.AST) -> bool:
-    if type(node) is ast.Subscript:
-        target = node.value
-        name = _node_name(target, attribute=True)
-        return bool(name and "cache" in name.lower())
-    if type(node) is ast.Attribute:
-        return "cache" in node.attr.lower()
-    return False
-
-
-def _is_pipeline_call(node: ast.Call) -> bool:
-    return _call_name_lower(node) in PIPELINE_CALL_NAMES
-
-
-def _is_register_call(node: ast.Call) -> bool:
-    name = _call_name_lower(node)
-    return any(token in name for token in REGISTER_CALL_TOKENS)
-
-
-def _call_name_lower(node: ast.Call) -> str:
-    return (_node_name(node.func, attribute=True) or "").lower()

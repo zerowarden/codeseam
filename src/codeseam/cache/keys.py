@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from codeseam.analysis import FileRecord, RepositoryScan
-from codeseam.platform import Json, json_digest
+from codeseam.platform import FileSelection, Json, json_digest
 from codeseam.version import (
     FILE_ANALYSIS_CACHE_KEY_SCHEMA_VERSION,
     FILE_ANALYSIS_CACHE_VERSION,
@@ -53,11 +53,11 @@ def language_analysis_cache_key(
     )
 
 
-def repository_facts_cache_key(scan: RepositoryScan, selection_config: object) -> str:
+def repository_facts_cache_key(scan: RepositoryScan, selection: FileSelection) -> str:
     return cache_key(
         {
             "schema_version": REPOSITORY_FACTS_CACHE_KEY_SCHEMA,
-            "selection": selection_config if isinstance(selection_config, dict) else {},
+            "selection": selection.payload(),
             "records": [
                 (
                     record.path,

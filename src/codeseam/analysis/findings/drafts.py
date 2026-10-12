@@ -4,11 +4,12 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
-from codeseam.analysis.assessment import AbstractionRisk, ContextClassification
+from codeseam.analysis.assessment import AbstractionRisk
 from codeseam.analysis.assessment.cluster import (
     CandidateGenerationSummary,
     Cluster,
     PolicyConstantCluster,
+    PolicyConstantMatch,
     StructuralSubcluster,
 )
 from codeseam.analysis.assessment.definitions import ExtractionConfidence, FindingTargetType
@@ -31,15 +32,20 @@ from codeseam.analysis.relations import (
     AbstractionKind,
     ActionKind,
     ActionStatus,
+    CloneClass,
     EvidenceKind,
-    RelationKind,
 )
+from codeseam.analysis.relations.actions import refactor_action_candidates
+from codeseam.analysis.relations.blocks import SharedBlock, shared_blocks
 from codeseam.analysis.relations.models import (
+    MemberRef,
     RefactorAction,
     RefactorActionSummary,
+    RelationKind,
     RelationPair,
     member_ref,
 )
+from codeseam.analysis.relations.subclusters import subcluster_members
 from codeseam.analysis.relations.summary import summarize_actions
 from codeseam.analysis.semantic_roles import (
     API_SURFACE_ROLES,
@@ -66,7 +72,31 @@ POLICY_CONSTANT_RELATEDNESS = 1.0
 POLICY_CONSTANT_REFACTORABILITY = 0.92
 POLICY_CONSTANT_CONFIDENCE = 0.98
 POLICY_CONSTANT_RISK = 0.04
-PROMOTED_PAIR_MEMBER_COUNT = 2
+# Unifying drifted copies changes what some callers get; unifying differently
+# named copies asserts the names mean one rule. Either is a medium risk, above
+# the introduction-risk ceiling, so it is recorded for review, never edited.
+POLICY_CONSTANT_DIVERGENT_RISK = 0.35
+POLICY_CONSTANT_MATCH_TEXT = {
+    PolicyConstantMatch.IDENTICAL: (
+        "Duplicated policy constant",
+        "Multiple source modules define the same top-level policy constant name.",
+        "The duplicated constants have identical structured literal values.",
+    ),
+    PolicyConstantMatch.DRIFTED: (
+        "Drifted policy constant",
+        "Multiple source modules define the same top-level policy constant name.",
+        "The copies share most items but their values have diverged.",
+    ),
+    PolicyConstantMatch.SCATTERED: (
+        "Scattered policy literal",
+        "The same structured literal is defined under different constant names.",
+        "The names may describe one rule, or unrelated rules that happen to agree.",
+    ),
+}
+PROMOTED_CLONE_TYPES = frozenset((CloneClass.TYPE_2_PARAMETERIZED, CloneClass.TYPE_3_NEAR_MISS))
+# Same bar as a strong relation in assessment (assess.RELATION_STRONG_CONFIDENCE).
+PROMOTED_RELATION_MIN_CONFIDENCE = 0.70
+COMPONENT_TITLE_NAME_LIMIT = 3
 PAIR_MEMBER_COUNT = 2
 GUARDED_PROMOTED_PAIR_MAX_BODY_LINES = 5
 GUARDED_PROMOTED_PAIR_MIN_STABLE_STATEMENTS = 5
@@ -106,11 +136,10 @@ class SignatureDraftContext:
     abstraction_risks: list[AbstractionRisk]
     structural_pairs: list[RelationPair]
     relation_pairs: list[RelationPair]
-    promoted_pairs: list[RelationPair]
+    promoted_components: list[list[RelationPair]]
     subclusters: list[StructuralSubcluster]
     actions: list[RefactorAction]
     action_summary: RefactorActionSummary | None
-    context_classifications: list[ContextClassification]
     candidate_generation: CandidateGenerationSummary | None
     structural_metrics: dict[str, Any]
     normalization_level: NormalizationLevel
@@ -133,7 +162,7 @@ def build_signature_drafts(
     for cluster in signature_clusters:
         ctx = _signature_draft_context(cluster, semantic_evidence)
         targets.append(_signature_cluster_draft(ctx))
-        targets.extend(_promoted_structural_pair_drafts(ctx))
+        targets.extend(_promoted_component_drafts(ctx))
     return targets
 
 
@@ -143,11 +172,17 @@ def _signature_draft_context(
 ) -> SignatureDraftContext:
     enrichment = cluster.enrichment
     structural_pairs = list(enrichment.structural_duplicate_pairs if enrichment else ())
-    relation_pairs = list(enrichment.structural_relation_pairs if enrichment else ())
+    # A pair that cleared the relatedness floor but matched no relation kind is a
+    # similarity signal, not structural evidence: it must not profile the cluster.
+    relation_pairs = [
+        pair
+        for pair in (enrichment.structural_relation_pairs if enrichment else ())
+        if pair.relation_kind is not RelationKind.NONE
+    ]
     subclusters = list(enrichment.structural_subclusters if enrichment else ())
     sync_async_cluster = _sync_async_cluster(cluster)
     members = tuple(member.signature for member in cluster.members)
-    all_relation_pairs = (*structural_pairs, *relation_pairs)
+    all_relation_pairs = unique_pairs(structural_pairs, relation_pairs)
     return SignatureDraftContext(
         cluster=cluster,
         members=members,
@@ -157,11 +192,10 @@ def _signature_draft_context(
         abstraction_risks=list(enrichment.abstraction_risks if enrichment else ()),
         structural_pairs=structural_pairs,
         relation_pairs=relation_pairs,
-        promoted_pairs=_promotable_exact_pairs(relation_pairs),
+        promoted_components=promotable_components(relation_pairs),
         subclusters=subclusters,
         actions=list(enrichment.refactor_action_candidates if enrichment else ()),
         action_summary=enrichment.refactor_action_summary if enrichment else None,
-        context_classifications=list(enrichment.context_classifications if enrichment else ()),
         candidate_generation=enrichment.candidate_generation if enrichment else None,
         structural_metrics=_structural_metrics(structural_pairs, relation_pairs, subclusters),
         normalization_level=cluster.normalization_level,
@@ -191,7 +225,7 @@ def _signature_draft_context(
 def _signature_cluster_draft(ctx: SignatureDraftContext) -> FindingDraft:
     cluster = ctx.cluster
     enrichment = cluster.enrichment
-    promoted_pairs = _parent_promoted_pairs(ctx)
+    promoted_pairs = [pair for component in _parent_promoted_components(ctx) for pair in component]
     return FindingDraft(
         target_type=FindingTargetType.SIGNATURE_SHAPE,
         title=_signature_title(cluster),
@@ -207,13 +241,14 @@ def _signature_cluster_draft(ctx: SignatureDraftContext) -> FindingDraft:
             language_count=cluster.language_count,
             adapter_count=cluster.adapter_count,
             min_extraction_confidence=cluster.min_extraction_confidence,
-            call_fingerprint_count=_member_feature_count(cluster, "call_tokens"),
-            control_context_count=_member_feature_count(cluster, "control_context_vector"),
             semantic_role_counts=ctx.semantic_role_counts,
             semantic_role_reasons=ctx.semantic_role_reasons,
             semantic_evidence=ctx.semantic_evidence,
-            promoted_exact_pair_count=len(promoted_pairs),
-            promoted_exact_pair_member_count=_relation_pair_member_count(promoted_pairs),
+            promoted_pair_count=len(promoted_pairs),
+            promoted_member_count=_relation_pair_member_count(promoted_pairs),
+            pair_member_count=_relation_pair_member_count(
+                unique_pairs(ctx.structural_pairs, ctx.relation_pairs)
+            ),
             **cast(Any, ctx.semantic_role_member_metrics),
             **ctx.structural_metrics,
         ),
@@ -246,7 +281,6 @@ def _signature_cluster_draft(ctx: SignatureDraftContext) -> FindingDraft:
         candidate_generation=ctx.candidate_generation,
         refactor_action_candidates=ctx.actions,
         refactor_action_summary=ctx.action_summary,
-        context_classifications=ctx.context_classifications,
     )
 
 
@@ -260,10 +294,11 @@ def build_policy_constant_drafts(
         evidence_kinds = list(cluster.evidence_kinds)
         actions = list(cluster.refactor_action_candidates)
         locations = _policy_constant_locations(members)
+        title, *reasons = POLICY_CONSTANT_MATCH_TEXT[cluster.match]
         targets.append(
             FindingDraft(
                 target_type=FindingTargetType.SIGNATURE_SHAPE,
-                title=f"Duplicated policy constant {_policy_constant_symbol(cluster)}",
+                title=f"{title} {_policy_constant_symbol(cluster)}",
                 severity="high",
                 confidence=float(cluster.confidence),
                 files=files,
@@ -279,22 +314,21 @@ def build_policy_constant_drafts(
                     min_extraction_confidence=ExtractionConfidence.HIGH,
                     structural_relation_pair_count=1,
                     same_role_relation_count=1,
-                    max_name_similarity=1.0,
-                    max_relatedness_score=POLICY_CONSTANT_RELATEDNESS,
-                    max_refactorability_score=POLICY_CONSTANT_REFACTORABILITY,
-                    max_relation_confidence_score=POLICY_CONSTANT_CONFIDENCE,
-                    max_relation_risk_score=POLICY_CONSTANT_RISK,
+                    lead_relatedness_score=POLICY_CONSTANT_RELATEDNESS,
+                    lead_refactorability_score=POLICY_CONSTANT_REFACTORABILITY,
+                    lead_confidence_score=POLICY_CONSTANT_CONFIDENCE,
+                    lead_risk_score=(
+                        POLICY_CONSTANT_RISK
+                        if cluster.match is PolicyConstantMatch.IDENTICAL
+                        else POLICY_CONSTANT_DIVERGENT_RISK
+                    ),
                 ),
                 evidence=[
                     EvidenceItem(EVIDENCE_KIND_POLICY_CONSTANT_CLUSTER, id=cluster.cluster_id),
                     EvidenceItem(EvidenceKind.POLICY_CONSTANT_DUPLICATE, id=cluster.cluster_id),
                 ],
-                reasons=[
-                    "Multiple source modules define the same top-level policy constant name.",
-                    "The duplicated constants have identical structured literal values.",
-                    "Policy ordering and ranking rules should have one source of truth.",
-                ],
-                risk="low",
+                reasons=[*reasons, "Policy rules should have one source of truth."],
+                risk="low" if cluster.match is PolicyConstantMatch.IDENTICAL else "medium",
                 direction=(
                     "Move the policy literal to a shared common module or configuration source "
                     "and import it at each call site."
@@ -330,6 +364,122 @@ def build_intra_function_duplicate_drafts(
     return drafts
 
 
+def build_shared_block_drafts(
+    signatures: Sequence[SignatureAnalysis], clusters: Sequence[Cluster]
+) -> list[FindingDraft]:
+    """Findings for statement blocks shared by otherwise different functions.
+
+    Pairs already found as whole-function clones are skipped, so a clone is
+    never reported twice. A pair that is only related as a whole (it differs
+    too much to consolidate) can still share a block worth extracting.
+    """
+
+    related = {
+        frozenset(
+            (
+                (pair.left.file, pair.left.start_line, pair.left.symbol),
+                (pair.right.file, pair.right.start_line, pair.right.symbol),
+            )
+        )
+        for cluster in clusters
+        if cluster.enrichment is not None
+        for pair in cluster.enrichment.structural_duplicate_pairs
+    }
+    cores = [signature.core for signature in signatures]
+    return [_shared_block_draft(block) for block in shared_blocks(cores, related=related)]
+
+
+def _shared_block_draft(block: SharedBlock) -> FindingDraft:
+    members = block.members
+    locations = [
+        FindingLocation(
+            file=item.member.file,
+            start_line=item.start_line,
+            end_line=item.end_line,
+            source="shared_block",
+            kind="duplicate_block",
+            symbol=item.member.symbol,
+            message="Statement block shared with other functions.",
+            container=item.member.container or "",
+        )
+        for item in block.occurrences
+    ]
+    line_counts = [item.line_count for item in block.occurrences]
+    action = RefactorAction(
+        kind=ActionKind.EXTRACT_SMALL_HELPER,
+        status=ActionStatus.RECOMMENDED,
+        confidence=0.85,
+        applies_to=tuple(member_ref(core) for core in members),
+        preconditions=("shared_block",),
+        reason_codes=("SHARED_BLOCK",),
+    )
+    names = " / ".join(dict.fromkeys(core.symbol for core in members))
+    return FindingDraft(
+        target_type=FindingTargetType.SIGNATURE_SHAPE,
+        title=f"Shared block in {names}",
+        severity="medium",
+        confidence=0.85,
+        files=list(dict.fromkeys(core.file for core in members)),
+        locations=locations,
+        metrics=FindingMetrics(
+            member_count=len(members),
+            canonical_shape=f"shared_block({block.statement_count} statements)",
+            cluster_scope="same_language",
+            normalization_level=NormalizationLevel.CONTROL,
+            language_count=1,
+            adapter_count=1,
+            min_extraction_confidence=ExtractionConfidence.HIGH,
+            duplicate_block_count=1,
+            duplicate_block_line_count=sum(line_counts),
+            max_body_line_count=max(line_counts),
+            min_body_line_count=min(line_counts),
+            lead_stable_statement_count=block.statement_count,
+            min_stable_statement_count=min(item.length for item in block.occurrences),
+            lead_tree_similarity=1.0,
+            lead_relatedness_score=0.85,
+            lead_refactorability_score=0.8,
+            lead_confidence_score=0.85,
+            # Statement keys abstract names and literal values, so the copies
+            # may differ in data a helper would have to take as parameters.
+            lead_risk_score=0.1,
+            semantic_role_counts=role_counts(
+                role for core in members for role in core.semantic_roles
+            ),
+            semantic_role_reasons=tuple(
+                dict.fromkeys(reason for core in members for reason in core.semantic_role_reasons)
+            ),
+            **cast(
+                Any,
+                _semantic_role_member_metrics(
+                    members, member_count=len(members), sync_async_surface=False
+                ),
+            ),
+        ),
+        evidence=[EvidenceItem(EvidenceKind.SHARED_BLOCK, id=block.fingerprint)],
+        reasons=[
+            f"A block of {block.statement_count} statements appears in {len(members)} functions.",
+            "The functions differ elsewhere, so whole-function comparison does not pair them.",
+        ],
+        risk="low",
+        direction=(
+            "Extract the shared block into a helper that the functions call, passing in "
+            "any names or values that differ between the copies."
+        ),
+        overlaps={"signatures": tuple(core.signature_id for core in members)},
+        member_count=len(members),
+        has_signature_overlap=False,
+        line_span=line_span(locations),
+        non_claims=[
+            "Only the block is shared; the rest of each function is different.",
+            "Copies may differ in names or literal values that a helper must take as parameters.",
+        ],
+        abstraction_kind=AbstractionKind.EXTRACT_HELPER,
+        evidence_kinds=[EvidenceKind.SHARED_BLOCK],
+        refactor_action_candidates=[action],
+        refactor_action_summary=summarize_actions([action]),
+    )
+
+
 def _intra_function_duplicate_draft(
     core: SignatureCore,
     block: IntraFunctionDuplicateBlock,
@@ -359,19 +509,19 @@ def _intra_function_duplicate_draft(
             language_count=1,
             adapter_count=1,
             min_extraction_confidence=ExtractionConfidence.HIGH,
-            intra_function_duplicate_block_count=1,
-            intra_function_duplicate_line_count=sum(
+            duplicate_block_count=1,
+            duplicate_block_line_count=sum(
                 occurrence.end_line - occurrence.start_line + 1 for occurrence in block.occurrences
             ),
             max_body_line_count=block.line_count,
             min_body_line_count=block.line_count,
-            max_stable_statement_count=block.statement_count,
+            lead_stable_statement_count=block.statement_count,
             min_stable_statement_count=block.statement_count,
-            max_tree_similarity=1.0,
-            max_relatedness_score=0.9,
-            max_refactorability_score=0.85,
-            max_relation_confidence_score=0.9,
-            max_relation_risk_score=0.04,
+            lead_tree_similarity=1.0,
+            lead_relatedness_score=0.9,
+            lead_refactorability_score=0.85,
+            lead_confidence_score=0.9,
+            lead_risk_score=0.04,
             semantic_role_counts=role_counts(core.semantic_roles),
             semantic_role_reasons=tuple(core.semantic_role_reasons),
             **cast(
@@ -429,6 +579,7 @@ def _intra_function_duplicate_locations(
             kind=block.kind,
             symbol=core.symbol,
             message="Repeated local block within this function.",
+            container=core.container or "",
         )
         for occurrence in block.occurrences
     ]
@@ -443,6 +594,8 @@ def _signature_reasons(
 ) -> list[str]:
     if EvidenceKind.ARGUMENT_NORMALIZATION_WRAPPER in evidence_kinds:
         reasons = ["A typed wrapper normalizes one argument before the same downstream operation."]
+    elif EvidenceKind.CONTENT_SIMILARITY in evidence_kinds:
+        reasons = ["Functions with different signatures or sizes share distinctive content."]
     else:
         reasons = ["Multiple functions share the same normalized signature shape."]
     if normalization_level is not NormalizationLevel.SIGNATURE:
@@ -452,7 +605,7 @@ def _signature_reasons(
     if structural_pairs:
         reasons.append(
             "Small functions also have similar normalized names, matching roles, "
-            "and similar normalized body trees."
+            "and similar normalized body structure."
         )
     if relation_pairs:
         reasons.append(
@@ -465,6 +618,11 @@ def _signature_reasons(
 
 def _signature_title(cluster: Cluster) -> str:
     shape = cluster.canonical_shape or "unknown"
+    if cluster.enrichment and EvidenceKind.CONTENT_SIMILARITY in cluster.enrichment.evidence_kinds:
+        names = dedupe(member.signature.symbol for member in cluster.members)
+        shown = names[:COMPONENT_TITLE_NAME_LIMIT]
+        more = f" +{len(names) - len(shown)}" if len(names) > len(shown) else ""
+        return "Similar implementations " + " / ".join(shown) + more
     if (
         cluster.enrichment
         and EvidenceKind.ARGUMENT_NORMALIZATION_WRAPPER in cluster.enrichment.evidence_kinds
@@ -478,31 +636,31 @@ def _signature_title(cluster: Cluster) -> str:
 
 
 def _policy_constant_symbol(cluster: PolicyConstantCluster) -> str:
-    if not cluster.members:
-        return cluster.canonical_shape or "unknown"
-    return cluster.members[0].symbol or "unknown"
+    symbols = dedupe(member.symbol for member in cluster.members if member.symbol)
+    return " / ".join(symbols) or cluster.canonical_shape or "unknown"
 
 
-def _promoted_structural_pair_drafts(
-    ctx: SignatureDraftContext,
-) -> list[FindingDraft]:
-    promoted_pairs = ctx.promoted_pairs
-    if not _should_promote_structural_pairs(ctx.cluster, promoted_pairs, ctx.relation_pairs):
-        return []
+def _promoted_component_drafts(ctx: SignatureDraftContext) -> list[FindingDraft]:
+    components = _parent_promoted_components(ctx)
     drafts: list[FindingDraft] = []
-    for index, pair in enumerate(promoted_pairs, 1):
-        locations = _relation_pair_locations(pair)
-        actions = list(pair.refactor_action_candidates)
-        action_summary = summarize_actions(actions)
+    for index, pairs in enumerate(components, 1):
+        members = subcluster_members(pairs)
+        locations = _member_locations(members)
+        has_exact_pair = any(pair.flags.body_hash_match for pair in pairs)
+        actions = (
+            list(pairs[0].refactor_action_candidates)
+            if len(pairs) == 1
+            else refactor_action_candidates(pairs, members)
+        )
         drafts.append(
             FindingDraft(
                 target_type=FindingTargetType.SIGNATURE_SHAPE,
-                title=_pair_title(pair),
+                title=_component_title(pairs, members),
                 severity="medium",
-                confidence=float(pair.scores.confidence),
-                files=dedupe([pair.left.file, pair.right.file]),
+                confidence=float(max(pair.scores.confidence for pair in pairs)),
+                files=dedupe(member.file for member in members),
                 locations=locations,
-                metrics=_pair_metrics(ctx.cluster, pair, ctx.semantic_evidence_index),
+                metrics=_component_metrics(ctx.cluster, pairs, ctx.semantic_evidence_index),
                 evidence=[
                     EvidenceItem(EVIDENCE_KIND_SIGNATURE_CLUSTER, id=ctx.cluster.cluster_id),
                     EvidenceItem(
@@ -511,61 +669,106 @@ def _promoted_structural_pair_drafts(
                     ),
                 ],
                 reasons=[
-                    "Exact or near-exact pair evidence was promoted out of a broader cluster.",
+                    "Clone relations were promoted out of a broader signature cluster.",
                     "The parent signature cluster may still be too broad for one refactor.",
                 ],
                 risk="low",
                 direction=(
-                    "Inspect this exact duplicate pair; consolidate only if semantic "
-                    "guardrails allow it."
+                    "Inspect these duplicates; consolidate only if semantic guardrails allow it."
                 ),
                 overlaps={"signature_clusters": (ctx.cluster.cluster_id,)},
-                member_count=PROMOTED_PAIR_MEMBER_COUNT,
+                member_count=len(members),
                 has_signature_overlap=True,
                 line_span=line_span(locations),
                 non_claims=list(ctx.cluster.non_claims or EVIDENCE_CAVEATS),
                 abstraction_kind=AbstractionKind.EXTRACT_HELPER,
                 evidence_kinds=[
                     EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
-                    EvidenceKind.STRUCTURAL_DUPLICATE,
+                    *([EvidenceKind.STRUCTURAL_DUPLICATE] if has_exact_pair else []),
                 ],
-                structural_relation_pairs=[pair],
+                structural_relation_pairs=pairs,
                 refactor_action_candidates=actions,
-                refactor_action_summary=action_summary,
+                refactor_action_summary=summarize_actions(actions),
             )
         )
     return drafts
 
 
-def _should_promote_structural_pairs(
+def should_promote(
     cluster: Cluster,
-    promoted_pairs: list[RelationPair],
+    components: list[list[RelationPair]],
     relation_pairs: list[RelationPair],
 ) -> bool:
+    """Promote unless the parent cluster is itself one duplicate group.
+
+    Several disjoint components are each narrower than the parent, even when
+    together they cover every member.
+    """
+
+    promoted = [pair for component in components for pair in component]
     return bool(
-        promoted_pairs
+        promoted
         and (
-            _relation_pair_member_count(promoted_pairs) < cluster.member_count
-            or len(relation_pairs) > len(promoted_pairs)
+            len(components) > 1
+            or _relation_pair_member_count(promoted) < cluster.member_count
+            or len(relation_pairs) > len(promoted)
         )
     )
 
 
-def _parent_promoted_pairs(ctx: SignatureDraftContext) -> list[RelationPair]:
-    if _should_promote_structural_pairs(ctx.cluster, ctx.promoted_pairs, ctx.relation_pairs):
-        return ctx.promoted_pairs
+def _parent_promoted_components(ctx: SignatureDraftContext) -> list[list[RelationPair]]:
+    if should_promote(ctx.cluster, ctx.promoted_components, ctx.relation_pairs):
+        return ctx.promoted_components
     return []
 
 
-def _promotable_exact_pairs(relation_pairs: list[RelationPair]) -> list[RelationPair]:
-    return [
-        pair
-        for pair in relation_pairs
-        if pair.same_role
-        and pair.flags.body_hash_match
-        and pair.relation_kind in {RelationKind.BODY_IDENTICAL, RelationKind.BODY_PARAMETERIZED}
-        and not _guarded_exact_pair_needs_cluster_context(pair)
-    ]
+def promotable_components(relation_pairs: list[RelationPair]) -> list[list[RelationPair]]:
+    """Connected groups of clone pairs that deserve their own target.
+
+    Exact pairs always qualify; near-miss clone pairs (type-2/3) qualify when the
+    relation is strong. Without this, a real duplicate inside a broad signature
+    bucket is only visible as part of the bucket's catch-all target.
+    """
+
+    return _pair_components([pair for pair in relation_pairs if _promotable(pair)])
+
+
+def _promotable(pair: RelationPair) -> bool:
+    if not pair.same_role or _guarded_exact_pair_needs_cluster_context(pair):
+        return False
+    if pair.flags.body_hash_match:
+        return True
+    return (
+        pair.clone_type in PROMOTED_CLONE_TYPES
+        and pair.scores.confidence >= PROMOTED_RELATION_MIN_CONFIDENCE
+    )
+
+
+def _pair_components(pairs: list[RelationPair]) -> list[list[RelationPair]]:
+    parent: dict[tuple[str, int, str], tuple[str, int, str]] = {}
+
+    def find(key: tuple[str, int, str]) -> tuple[str, int, str]:
+        while parent.setdefault(key, key) != key:
+            key = parent[key]
+        return key
+
+    for pair in pairs:
+        parent[find(_member_key(pair.left))] = find(_member_key(pair.right))
+    groups: dict[tuple[str, int, str], list[RelationPair]] = {}
+    for pair in pairs:
+        groups.setdefault(find(_member_key(pair.left)), []).append(pair)
+    return sorted(
+        (sorted(group, key=_pair_location_key) for group in groups.values()),
+        key=lambda group: _pair_location_key(group[0]),
+    )
+
+
+def _member_key(member: MemberRef) -> tuple[str, int, str]:
+    return member.file, member.start_line, member.symbol
+
+
+def _pair_location_key(pair: RelationPair) -> tuple[tuple[str, int, str], tuple[str, int, str]]:
+    return _member_key(pair.left), _member_key(pair.right)
 
 
 def _guarded_exact_pair_needs_cluster_context(pair: RelationPair) -> bool:
@@ -587,15 +790,23 @@ def _guarded_exact_pair_needs_cluster_context(pair: RelationPair) -> bool:
     )
 
 
-def _pair_title(pair: RelationPair) -> str:
-    if pair.left.symbol and pair.left.symbol == pair.right.symbol:
-        return f"Duplicate helper {pair.left.symbol}"
-    left = pair.left.symbol or "left helper"
-    right = pair.right.symbol or "right helper"
-    return f"Duplicate helper pair {left} / {right}"
+def _component_title(pairs: list[RelationPair], members: list[MemberRef]) -> str:
+    if len(pairs) == 1:
+        pair = pairs[0]
+        if pair.left.symbol and pair.left.symbol == pair.right.symbol:
+            return f"Duplicate helper {pair.left.symbol}"
+        left = pair.left.symbol or "left helper"
+        right = pair.right.symbol or "right helper"
+        return f"Duplicate helper pair {left} / {right}"
+    names = dedupe(member.symbol for member in members if member.symbol)
+    if len(names) == 1:
+        return f"Duplicate helper {names[0]} ({len(members)} copies)"
+    shown = names[:COMPONENT_TITLE_NAME_LIMIT]
+    more = f" +{len(names) - len(shown)}" if len(names) > len(shown) else ""
+    return "Duplicate helpers " + " / ".join(shown) + more
 
 
-def _relation_pair_locations(pair: RelationPair) -> list[FindingLocation]:
+def _member_locations(members: list[MemberRef]) -> list[FindingLocation]:
     return [
         FindingLocation(
             file=member.file,
@@ -604,91 +815,53 @@ def _relation_pair_locations(pair: RelationPair) -> list[FindingLocation]:
             source="structural_pair",
             kind="structural_duplicate",
             symbol=member.symbol,
-            message="Promoted exact duplicate pair from a broader signature cluster.",
+            message="Promoted clone relation from a broader signature cluster.",
+            container=member.container,
         )
-        for member in (pair.left, pair.right)
+        for member in members
     ]
 
 
-def _pair_metrics(
+def _component_metrics(
     cluster: Cluster,
-    pair: RelationPair,
+    pairs: list[RelationPair],
     semantic_evidence: SemanticEvidenceIndex,
 ) -> FindingMetrics:
-    sync_async_pair = _sync_async_member_pair(pair.left, pair.right)
-    role_counts = _relation_role_counts((pair,))
-    semantic_role_counts = _member_ref_semantic_role_counts(
-        (pair.left, pair.right),
-        sync_async_pair=sync_async_pair,
-    )
-    semantic_role_reasons = tuple(
-        dict.fromkeys(
-            [
-                *pair.left.semantic_role_reasons,
-                *pair.right.semantic_role_reasons,
-                *_sync_async_pair_reasons(sync_async_pair),
-            ]
-        )
-    )
+    """Metrics for a promoted clone component; exact (body-hash) pairs count as duplicates."""
+
+    members = subcluster_members(pairs)
+    sync_async = len(members) == PAIR_MEMBER_COUNT and _sync_async_member_pair(*members)
     return FindingMetrics(
-        member_count=PROMOTED_PAIR_MEMBER_COUNT,
+        member_count=len(members),
         canonical_shape=cluster.canonical_shape,
         cluster_scope=cluster.cluster_scope,
         normalization_level=cluster.normalization_level,
         language_count=cluster.language_count,
         adapter_count=cluster.adapter_count,
         min_extraction_confidence=cluster.min_extraction_confidence,
-        structural_duplicate_pair_count=1,
-        structural_relation_pair_count=1,
-        body_hash_match_count=1 if pair.flags.body_hash_match else 0,
-        max_name_similarity=round(pair.scores.name, 4),
-        max_tree_similarity=round(pair.tree.tree_similarity, 4),
-        relation_kind_counts={pair.relation_kind.value: 1},
-        delta_kind_counts=_delta_counts([pair]),
-        same_role_relation_count=1 if pair.same_role else 0,
-        clone_type_counts={pair.clone_type.value: 1},
-        max_relatedness_score=round(pair.scores.relatedness, 4),
-        max_refactorability_score=round(pair.scores.refactorability, 4),
-        max_abstraction_cost_score=round(pair.scores.abstraction_cost, 4),
-        max_relation_risk_score=round(pair.scores.risk, 4),
-        max_relation_confidence_score=round(pair.scores.confidence, 4),
-        max_tree_node_count=pair.tree.tree_node_count,
-        max_body_line_count=pair.max_body_line_count,
-        min_body_line_count=pair.min_body_line_count,
-        max_stable_statement_count=pair.anti_unification.stable_statement_count,
-        min_stable_statement_count=pair.anti_unification.stable_statement_count,
-        max_hole_count=pair.anti_unification.hole_count,
-        max_hole_size=pair.anti_unification.max_hole_size,
-        semantic_role_counts=semantic_role_counts,
-        semantic_role_reasons=semantic_role_reasons,
+        semantic_role_counts=_member_ref_semantic_role_counts(
+            tuple(members), sync_async_pair=sync_async
+        ),
+        semantic_role_reasons=tuple(
+            dict.fromkeys(
+                [
+                    *(reason for member in members for reason in member.semantic_role_reasons),
+                    *_sync_async_pair_reasons(sync_async),
+                ]
+            )
+        ),
         semantic_evidence=semantic_evidence.metrics_for_members(
-            (pair.left, pair.right),
-            relation_pairs=(pair,),
+            tuple(members), relation_pairs=tuple(pairs)
         ),
         **cast(
             Any,
             _semantic_role_member_metrics(
-                (pair.left, pair.right),
-                member_count=PAIR_MEMBER_COUNT,
-                sync_async_surface=sync_async_pair,
+                tuple(members),
+                member_count=len(members),
+                sync_async_surface=sync_async,
             ),
         ),
-        guardrail_relation_pair_count=1,
-        constructor_duplicate_pair_count=role_counts.constructor,
-        constructor_relation_pair_count=role_counts.constructor,
-        example_duplicate_pair_count=role_counts.example,
-        example_relation_pair_count=role_counts.example,
-        test_duplicate_pair_count=role_counts.test,
-        test_relation_pair_count=role_counts.test,
-        declaration_duplicate_pair_count=role_counts.declaration,
-        declaration_relation_pair_count=role_counts.declaration,
-        interface_only_duplicate_pair_count=role_counts.interface_only,
-        protocol_duplicate_pair_count=role_counts.protocol,
-        api_surface_duplicate_pair_count=role_counts.api_surface,
-        interface_only_relation_pair_count=role_counts.interface_only,
-        protocol_relation_pair_count=role_counts.protocol,
-        api_surface_relation_pair_count=role_counts.api_surface,
-        same_directory_relation_count=1 if _same_directory_pair(pair) else 0,
+        **_structural_metrics([pair for pair in pairs if pair.flags.body_hash_match], pairs, []),
     )
 
 
@@ -705,14 +878,6 @@ def _policy_constant_locations(members: list[PolicyConstant]) -> list[FindingLoc
         )
         for member in members
     ]
-
-
-def _member_feature_count(cluster: Cluster, key: str) -> int:
-    return sum(
-        len(value)
-        for member in cluster.members
-        if isinstance(value := getattr(member.signature, key, ()), list | tuple)
-    )
 
 
 def _cluster_semantic_role_counts(
@@ -777,43 +942,27 @@ def _structural_metrics(
 ) -> dict[str, Any]:
     if not pairs and not relation_pairs and not subclusters:
         return {}
-    all_relation_pairs = [*pairs, *relation_pairs]
-    scored_pairs = all_relation_pairs
-    if not scored_pairs:
+    all_pairs = unique_pairs(pairs, relation_pairs)
+    if not all_pairs:
         return {
             "structural_duplicate_pair_count": 0,
             "structural_relation_pair_count": 0,
         }
-    name_scores = [pair.scores.name for pair in scored_pairs]
-    tree_scores = [pair.tree.tree_similarity for pair in scored_pairs]
-    stable_statement_counts = [
-        pair.anti_unification.stable_statement_count for pair in all_relation_pairs
-    ]
-    hole_counts = [pair.anti_unification.hole_count for pair in relation_pairs]
-    hole_sizes = [pair.anti_unification.max_hole_size for pair in relation_pairs]
-    max_body_line_counts = [pair.max_body_line_count for pair in all_relation_pairs]
-    min_body_line_counts = [
-        pair.min_body_line_count
-        for pair in all_relation_pairs
-        if type(pair.min_body_line_count) is int
-    ]
+    lead = lead_pair(all_pairs)
     duplicate_role_counts = _relation_role_counts(pairs)
-    relation_role_counts = _relation_role_counts(all_relation_pairs)
+    relation_role_counts = _relation_role_counts(all_pairs)
+    min_body_line_counts = [
+        pair.min_body_line_count for pair in all_pairs if type(pair.min_body_line_count) is int
+    ]
     metrics: dict[str, Any] = {
         "structural_duplicate_pair_count": len(pairs),
         "structural_relation_pair_count": len(relation_pairs),
-        "body_hash_match_count": sum(
-            1 for pair in all_relation_pairs if pair.flags.body_hash_match
-        ),
-        "max_name_similarity": round(max(name_scores), 4),
-        "max_tree_similarity": round(max(tree_scores), 4),
-        "relation_kind_counts": _relation_kind_counts(all_relation_pairs),
-        "delta_kind_counts": _delta_counts(all_relation_pairs),
-        "same_role_relation_count": sum(1 for pair in all_relation_pairs if pair.same_role),
-        "same_directory_relation_count": sum(
-            1 for pair in all_relation_pairs if _same_directory_pair(pair)
-        ),
-        "guardrail_relation_pair_count": len(all_relation_pairs),
+        "body_hash_match_count": sum(1 for pair in all_pairs if pair.flags.body_hash_match),
+        "relation_kind_counts": _relation_kind_counts(all_pairs),
+        "delta_kind_counts": _delta_counts(all_pairs),
+        "same_role_relation_count": sum(1 for pair in all_pairs if pair.same_role),
+        "same_directory_relation_count": sum(1 for pair in all_pairs if _same_directory_pair(pair)),
+        "guardrail_relation_pair_count": len(all_pairs),
         "constructor_duplicate_pair_count": duplicate_role_counts.constructor,
         "constructor_relation_pair_count": relation_role_counts.constructor,
         "example_duplicate_pair_count": duplicate_role_counts.example,
@@ -828,45 +977,60 @@ def _structural_metrics(
         "interface_only_relation_pair_count": relation_role_counts.interface_only,
         "protocol_relation_pair_count": relation_role_counts.protocol,
         "api_surface_relation_pair_count": relation_role_counts.api_surface,
-        "clone_type_counts": _clone_type_counts(all_relation_pairs),
+        # One relation's profile comes from one pair, never from several pairs' maxima.
+        **_lead_pair_metrics(lead),
+        # Extent guards stay cluster-wide on purpose: they bound every member.
+        "max_body_line_count": max(pair.max_body_line_count for pair in all_pairs),
+        "min_stable_statement_count": min(
+            pair.anti_unification.stable_statement_count for pair in all_pairs
+        ),
     }
-    _add_numeric_max(metrics, all_relation_pairs, "max_relatedness_score", "relatedness")
-    _add_numeric_max(metrics, all_relation_pairs, "max_refactorability_score", "refactorability")
-    _add_numeric_max(
-        metrics,
-        all_relation_pairs,
-        "max_abstraction_cost_score",
-        "abstraction_cost",
-    )
-    _add_numeric_max(metrics, all_relation_pairs, "max_relation_risk_score", "risk")
-    _add_numeric_max(metrics, all_relation_pairs, "max_relation_confidence_score", "confidence")
-    if node_counts := [pair.tree.tree_node_count for pair in scored_pairs]:
-        metrics["max_tree_node_count"] = max(node_counts)
-    if max_body_line_counts:
-        metrics["max_body_line_count"] = max(max_body_line_counts)
     if min_body_line_counts:
         metrics["min_body_line_count"] = min(min_body_line_counts)
-    if stable_statement_counts:
-        metrics["max_stable_statement_count"] = max(stable_statement_counts)
-        metrics["min_stable_statement_count"] = min(stable_statement_counts)
-    if hole_counts:
-        metrics["max_hole_count"] = max(hole_counts)
-    if hole_sizes:
-        metrics["max_hole_size"] = max(hole_sizes)
     return metrics
+
+
+def unique_pairs(*groups: Sequence[RelationPair]) -> list[RelationPair]:
+    """Merge pair groups without double counting (duplicate pairs are a subset of relations)."""
+
+    return list({id(pair): pair for group in groups for pair in group}.values())
+
+
+def lead_pair(pairs: Sequence[RelationPair]) -> RelationPair:
+    """The pair a cluster's score profile is taken from: highest confidence, then location."""
+
+    return min(
+        pairs,
+        key=lambda pair: (
+            -pair.scores.confidence,
+            -pair.scores.relatedness,
+            -pair.scores.refactorability,
+            pair.left.file,
+            pair.left.start_line,
+            pair.right.file,
+            pair.right.start_line,
+        ),
+    )
+
+
+def _lead_pair_metrics(pair: RelationPair) -> dict[str, Any]:
+    return {
+        "lead_tree_similarity": round(pair.tree.tree_similarity, 4),
+        "lead_relatedness_score": round(pair.scores.relatedness, 4),
+        "lead_refactorability_score": round(pair.scores.refactorability, 4),
+        "lead_abstraction_cost_score": round(pair.scores.abstraction_cost, 4),
+        "lead_risk_score": round(pair.scores.risk, 4),
+        "lead_confidence_score": round(pair.scores.confidence, 4),
+        "lead_stable_statement_count": pair.anti_unification.stable_statement_count,
+        "lead_hole_count": pair.anti_unification.hole_count,
+        "lead_hole_size": pair.anti_unification.max_hole_size,
+    }
 
 
 def _relation_kind_counts(pairs: list[RelationPair]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for pair in pairs:
         counts[pair.relation_kind.value] = counts.get(pair.relation_kind.value, 0) + 1
-    return counts
-
-
-def _clone_type_counts(pairs: list[RelationPair]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for pair in pairs:
-        counts[pair.clone_type.value] = counts.get(pair.clone_type.value, 0) + 1
     return counts
 
 
@@ -1003,19 +1167,9 @@ def _pair_either_member_has_role_family(
     return bool((_member_roles(pair.left) | _member_roles(pair.right)) & target_roles)
 
 
-def _add_numeric_max(
-    metrics: dict[str, Any],
-    pairs: Iterable[RelationPair],
-    metric_key: str,
-    score_key: str,
-) -> None:
-    value = max((float(getattr(pair.scores, score_key)) for pair in pairs), default=None)
-    if value is not None:
-        metrics[metric_key] = round(value, 4)
-
-
 __all__ = [
     "build_intra_function_duplicate_drafts",
+    "build_shared_block_drafts",
     "build_policy_constant_drafts",
     "build_signature_drafts",
 ]

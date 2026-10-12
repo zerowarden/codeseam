@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -15,8 +14,11 @@ from codeseam.adapters.languages.base import (
     LanguageAdapterAnalysis,
     LanguageAnalysisContext,
     StaticLanguageSupport,
+    read_source,
 )
 from codeseam.adapters.languages.capabilities import AdapterCapabilities
+from codeseam.adapters.languages.ecmascript.body_shape import body_tree
+from codeseam.adapters.languages.ecmascript.callsites import callsite_patterns
 from codeseam.adapters.languages.ecmascript.compiler_facts import (
     TypeScriptProjectFacts,
     extract_typescript_project_facts,
@@ -24,7 +26,11 @@ from codeseam.adapters.languages.ecmascript.compiler_facts import (
 from codeseam.adapters.languages.ecmascript.duplicate_blocks import (
     ecmascript_intra_function_duplicate_blocks,
 )
-from codeseam.adapters.languages.ecmascript.features import operation_features
+from codeseam.adapters.languages.ecmascript.features import (
+    NONE_ROLE,
+    default_value_role,
+    operation_features,
+)
 from codeseam.adapters.languages.ecmascript.manifests import ECMASCRIPT_MANIFEST_MATCHERS
 from codeseam.adapters.languages.ecmascript.runtime import (
     TreeSitterRuntime,
@@ -34,20 +40,23 @@ from codeseam.adapters.languages.ecmascript.runtime import (
 from codeseam.adapters.languages.ecmascript.semantic_roles import (
     FunctionRoleContext,
     classify_function_roles,
+    delegating_call,
+    trivial_body,
 )
 from codeseam.adapters.languages.ecmascript.syntax_kinds import (
     BODY_CALLABLE_TYPES,
     BRANCH_TYPES,
     CALLABLE_TYPES,
+    CLASS_TYPES,
     JSX_TYPES,
     LOOP_TYPES,
+    NESTING_TYPES,
     TSX_SUFFIXES,
     TYPESCRIPT_SUFFIXES,
 )
 from codeseam.adapters.languages.relation_detail import RelationDetailRequest
 from codeseam.analysis import (
     AdapterId,
-    CallsitePattern,
     EvidenceKind,
     FunctionIR,
     FunctionRecord,
@@ -60,6 +69,7 @@ from codeseam.analysis import (
     is_callable_return,
     signature_shape,
 )
+from codeseam.caveat_msg import PARSE_ERROR_CAVEAT
 from codeseam.platform import normalize_identifier
 
 JS_TS_LANGUAGES = frozenset({"TypeScript", "TSX", "JavaScript", "JSX"})
@@ -68,6 +78,17 @@ LANGUAGE_FAMILY = LanguageFamily.ECMASCRIPT_TYPESCRIPT
 HOOK_PREFIX = "use"
 MIN_HOOK_NAME_LENGTH = len(HOOK_PREFIX) + 1
 UNKNOWN = "UNKNOWN"
+
+# Where an anonymous function takes its name from: `const f = () => {}`, `{ f: () => {} }`,
+# class fields `f = () => {}` (TypeScript `name`, JavaScript `property`), `obj.f = ...`.
+PARENT_NAME_FIELDS = {
+    "variable_declarator": "name",
+    "pair": "key",
+    "public_field_definition": "name",
+    "field_definition": "property",
+    "assignment_expression": "left",
+}
+DEFAULT_EXPORT_SYMBOL = "default"
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,11 +110,10 @@ class ECMAScriptTypeScriptTreeSitterAdapter(StaticLanguageSupport):
     )
 
     def extract_analysis(self, context: LanguageAnalysisContext) -> LanguageAdapterAnalysis:
-        source = _source_bytes(context)
+        source = read_source(context)
         functions = _functions(context, source)
         signature_records = [_signature_record(function, context.role) for function in functions]
-        lines = source.decode("utf-8", errors="replace").splitlines()
-        _attach_callsite_evidence(signature_records, lines, context.relative_path)
+        _attach_callsite_evidence(signature_records, context, source)
         return LanguageAdapterAnalysis(
             functions=tuple(
                 _function_record(function, context.role)
@@ -101,6 +121,7 @@ class ECMAScriptTypeScriptTreeSitterAdapter(StaticLanguageSupport):
                 if function.has_body
             ),
             signatures=tuple(signature_records),
+            diagnostics=_parse_diagnostics(context, source, functions),
         )
 
     def hydrate_relation_detail(
@@ -120,7 +141,7 @@ def _functions(
     context: LanguageAnalysisContext,
     source: bytes | None = None,
 ) -> list[FunctionIR]:
-    source = source if source is not None else _source_bytes(context)
+    source = source if source is not None else read_source(context)
     if context.run_cache is not None:
         return context.run_cache.functions(
             context,
@@ -194,6 +215,7 @@ def _relation_detail_from_source(source: str, signature_id: str) -> SignatureAna
         normalization_transform_tokens=frozenset(compact.normalization_transform_tokens),
         statement_arg_reads=compact.statement_arg_reads,
         call_fingerprints=features.flow.call_fingerprints,
+        body_tree=body_tree(source_bytes, body_node, params),
     )
 
 
@@ -223,6 +245,20 @@ def _first_body_callable(source: bytes) -> Node | None:
     )
 
 
+def _parse_diagnostics(
+    context: LanguageAnalysisContext,
+    source: bytes,
+    functions: list[FunctionIR],
+) -> tuple[str, ...]:
+    if recovered := sum(PARSE_ERROR_CAVEAT in function.caveats for function in functions):
+        return (f"tree_sitter_parse_error: {recovered} function(s) recovered from syntax errors",)
+    # A badly broken file can yield no functions at all; re-checking the tree is cheap.
+    runtime = _runtime_for(context.path, context.language)
+    if not functions and runtime.parse(source).root_node.has_error:
+        return ("tree_sitter_parse_error: no functions recovered",)
+    return ()
+
+
 def _runtime_for(path: Path, language: str) -> TreeSitterRuntime:
     suffix = path.suffix.lower()
     if suffix in TSX_SUFFIXES or language == "TSX":
@@ -250,12 +286,6 @@ def _runtime(language_name: str) -> TreeSitterRuntime:
         "javascript",
         Language(tsjavascript.language()),
     )
-
-
-def _source_bytes(context: LanguageAnalysisContext) -> bytes:
-    if context.run_cache is not None:
-        return context.run_cache.source_bytes(context)
-    return context.path.read_bytes()
 
 
 def _function_ir(
@@ -288,6 +318,8 @@ def _function_ir(
             ),
             has_jsx_body=_contains_node_type(body_node, JSX_TYPES),
             has_hook_call=_has_hook_call(source, body_node),
+            is_trivial_body=trivial_body(body_node),
+            is_simple_forwarder=delegating_call(body_node),
         )
     )
     return FunctionIR(
@@ -318,11 +350,13 @@ def _function_ir(
         body_line_count=body_line_count,
         branch_count=_count_nodes(scope_node, BRANCH_TYPES),
         loop_count=_count_nodes(scope_node, LOOP_TYPES),
-        return_count=_count_nodes(scope_node, frozenset({"return_statement"})),
-        max_nesting=_brace_nesting(body_text or source_text),
+        # An arrow function's expression body is its return, like a Python lambda.
+        return_count=_count_nodes(scope_node, frozenset({"return_statement"}))
+        + (body_node is not None and body_node.type != "statement_block"),
+        max_nesting=_max_nesting(scope_node),
         adapter=ADAPTER_ID,
-        extraction_confidence="high",
-        caveats=(),
+        extraction_confidence="low" if node.has_error else "high",
+        caveats=(PARSE_ERROR_CAVEAT,) if node.has_error else (),
         features=operation_features(source, body_node, params),
         syntax_kind=node.type,
         semantic_roles=semantic_roles.roles,
@@ -344,30 +378,33 @@ def _symbol(source: bytes, node: Node) -> str | None:
     parent = node.parent
     if parent is None:
         return None
-    if parent.type == "variable_declarator":
-        return _clean_optional_text(
-            node_text(source, parent.child_by_field_name("name")),
-            clean_symbol_text,
-        )
-    if parent.type == "pair":
-        return _clean_optional_text(
-            node_text(source, parent.child_by_field_name("key")),
-            clean_symbol_text,
-        )
-    if parent.type == "assignment_expression":
-        return _clean_optional_text(
-            node_text(source, parent.child_by_field_name("left")),
-            clean_symbol_text,
-        )
-    return None
+    if parent.type == "export_statement":  # `export default function () {}`
+        return DEFAULT_EXPORT_SYMBOL
+    field = PARENT_NAME_FIELDS.get(parent.type)
+    if field is None:
+        return None
+    return _clean_optional_text(
+        node_text(source, parent.child_by_field_name(field)), clean_symbol_text
+    )
 
 
 def _container(source: bytes, node: Node) -> str | None:
     current = node.parent
     while current is not None:
-        if current.type == "class_declaration":
-            return node_text(source, current.child_by_field_name("name"))
+        if current.type in CLASS_TYPES:
+            return _class_name(source, current)
         current = current.parent
+    return None
+
+
+def _class_name(source: bytes, node: Node) -> str | None:
+    if name := node_text(source, node.child_by_field_name("name")):
+        return name
+    parent = node.parent
+    if parent is not None and parent.type == "variable_declarator":
+        return node_text(source, parent.child_by_field_name("name"))
+    if parent is not None and parent.type == "export_statement":
+        return DEFAULT_EXPORT_SYMBOL
     return None
 
 
@@ -417,23 +454,34 @@ def _params(source: bytes, params_node: Node | None) -> list[ParamIR]:
 
 def _param(source: bytes, node: Node) -> ParamIR:
     if node.type in {"required_parameter", "optional_parameter"}:
+        value = node.child_by_field_name("value")
+        optional = node.type == "optional_parameter"
         return ParamIR(
             annotation=_clean_optional_text(
                 node_text(source, node.child_by_field_name("type")),
                 strip_type_marker,
             ),
-            name=node_text(source, node.child_by_field_name("pattern")),
-            has_default=node.type == "optional_parameter",
+            name=_pattern_name(source, node.child_by_field_name("pattern")),
+            # An optional parameter without a value defaults to `undefined`.
+            default_role=default_value_role(source, value) if value else NONE_ROLE * optional,
         )
     if node.type == "assignment_pattern":
         left = node.child_by_field_name("left")
         left_type = left.child_by_field_name("type") if left is not None else None
         return ParamIR(
             annotation=_clean_optional_text(node_text(source, left_type), strip_type_marker),
-            name=node_text(source, left),
-            has_default=True,
+            name=_pattern_name(source, left),
+            default_role=default_value_role(source, node.child_by_field_name("right")),
         )
-    return ParamIR(annotation=None, name=node_text(source, node))
+    return ParamIR(annotation=None, name=_pattern_name(source, node))
+
+
+def _pattern_name(source: bytes, node: Node | None) -> str | None:
+    """The bound name; `...rest` binds `rest`."""
+
+    if node is not None and node.type == "rest_pattern" and node.named_children:
+        node = node.named_children[0]
+    return node_text(source, node)
 
 
 def clean_symbol_text(value: str) -> str:
@@ -503,16 +551,18 @@ def _call_name(source: bytes, call: Node) -> str:
     return ""
 
 
-def _brace_nesting(source: str) -> int:
-    depth = 0
-    maximum = 0
-    for char in source:
-        if char == "{":
+def _max_nesting(node: Node) -> int:
+    """Deepest stack of nested control statements; a flat body is 0, as in Python."""
+
+    deepest = 0
+    stack = [(node, 0)]
+    while stack:
+        current, depth = stack.pop()
+        if current.type in NESTING_TYPES:
             depth += 1
-            maximum = max(maximum, depth)
-        elif char == "}":
-            depth = max(0, depth - 1)
-    return maximum
+            deepest = max(deepest, depth)
+        stack.extend((child, depth) for child in current.named_children)
+    return deepest
 
 
 def _function_record(function: FunctionIR, role: str) -> FunctionRecord:
@@ -563,6 +613,8 @@ def _signature_record(function: FunctionIR, role: str) -> SignatureRecord:
         body_tree=None,
         body_tree_node_count=features.compact.body_tree_node_count,
         statement_sequence=list(features.compact.statement_sequence),
+        statement_keys=features.compact.statement_keys,
+        statement_spans=features.compact.statement_spans,
         call_tokens=features.compact.call_tokens,
         call_fingerprints=features.flow.call_fingerprints,
         parameter_use_vectors=dict(features.flow.parameter_use_vectors),
@@ -578,83 +630,26 @@ def _signature_record(function: FunctionIR, role: str) -> SignatureRecord:
 
 def _attach_callsite_evidence(
     records: list[SignatureRecord],
-    lines: list[str],
-    file_path: str,
+    context: LanguageAnalysisContext,
+    source: bytes,
 ) -> None:
-    factories = {record.symbol for record in records if is_callable_return(record.return_type)}
+    factories = frozenset(
+        record.symbol for record in records if is_callable_return(record.return_type)
+    )
     if not factories:
         return
-    patterns = _callsite_patterns(lines, factories, file_path)
+    root = _runtime_for(context.path, context.language).parse(source).root_node
+    patterns = callsite_patterns(source, root, factories, context.relative_path)
     for record in records:
-        symbol = record.symbol
-        if symbol not in factories:
+        if record.symbol not in factories:
             continue
-        symbol_patterns = patterns.get(symbol, [])
+        symbol_patterns = patterns.get(record.symbol, ())
         record.is_callable_factory = True
         record.evidence_kinds = [
             EvidenceKind.CALLABLE_FACTORY,
             *callsite_evidence_kinds(symbol_patterns),
         ]
-        record.callsite_patterns = tuple(symbol_patterns)
-
-
-def _callsite_patterns(
-    lines: list[str],
-    factories: set[str],
-    file_path: str,
-) -> dict[str, list[CallsitePattern]]:
-    patterns: dict[str, list[CallsitePattern]] = defaultdict(list)
-    assigned: dict[str, tuple[str, int]] = {}
-    uses: dict[str, int] = defaultdict(int)
-    for line_no, line in enumerate(lines, 1):
-        for symbol in factories:
-            escaped = re.escape(symbol)
-            if re.search(rf"\b{escaped}\s*\([^)]*\)\s*\(", line):
-                _add(patterns, symbol, EvidenceKind.CALLSITE_IMMEDIATE, file_path, line_no)
-            if re.search(rf"\.(?:map|filter)\s*\(\s*{escaped}\s*\(", line):
-                _add(patterns, symbol, EvidenceKind.CALLSITE_PIPELINE, file_path, line_no)
-            if re.search(rf"\b(?:map|filter|pipe)\s*\(\s*{escaped}\s*\(", line):
-                _add(patterns, symbol, EvidenceKind.CALLSITE_PIPELINE, file_path, line_no)
-            if re.search(rf"\b(?:register|add|use|route|on)\w*\s*\([^)]*{escaped}\s*\(", line):
-                _add(patterns, symbol, EvidenceKind.CALLSITE_REGISTERED, file_path, line_no)
-            if re.search(rf"\bcache(?:\.set|\[).*{escaped}\s*\(", line):
-                _add(patterns, symbol, EvidenceKind.CALLSITE_CACHED, file_path, line_no)
-            assignment_re = rf"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*{escaped}\s*\("
-            if match := re.search(assignment_re, line):
-                assigned[match.group(1)] = (symbol, line_no)
-        for variable in assigned:
-            if re.search(rf"\b{re.escape(variable)}\s*\(", line):
-                uses[variable] += 1
-    for variable, (symbol, line_no) in assigned.items():
-        if uses[variable] > 1:
-            _add(
-                patterns,
-                symbol,
-                EvidenceKind.CALLSITE_STORED_REUSE,
-                file_path,
-                line_no,
-                variable=variable,
-            )
-    return dict(patterns)
-
-
-def _add(
-    patterns: dict[str, list[CallsitePattern]],
-    symbol: str,
-    kind: str,
-    file_path: str,
-    line: int,
-    **extra: object,
-) -> None:
-    item = CallsitePattern(
-        kind=kind,
-        symbol=symbol,
-        file=file_path,
-        line=line,
-        variable=str(extra.get("variable", "")),
-    )
-    if item not in patterns[symbol]:
-        patterns[symbol].append(item)
+        record.callsite_patterns = symbol_patterns
 
 
 __all__ = [

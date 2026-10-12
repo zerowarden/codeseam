@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from codeseam.analysis import primary_action
-from codeseam.output.serializers.finding_buckets import agent_summary_targets
 from codeseam.output.serializers.review import target_review_tier
 from codeseam.platform import Json, as_json_object, as_json_objects, json_text, text_list
 
@@ -10,25 +9,17 @@ READ_ORDER_KEYS = (
     "agent_metrics",
     "meta_readme",
 )
-WEAK_FAMILY_EXAMPLE_LIMIT = 2
-WEAK_FAMILY_LABELS = {
-    "adapter_contract_method": "Interface/adapter contract methods",
-    "generic_formatter_boundary": "Generic formatter boundaries",
-    "tiny_predicate_boundary": "Tiny predicate boundary matches",
-    "render_section_family": "Render section families",
-    "shared_lifecycle_different_payload": "Shared lifecycle with different payloads",
-}
 
 
 def agent_summary_model(
     report: Json,
-    targets: Json,
+    all_agent_targets: list[Json],
     metrics: Json,
     *,
     max_targets: int | None = None,
 ) -> Json:
-    all_targets = as_json_objects(targets.get("targets"))
-    all_agent_targets = agent_summary_targets(all_targets)
+    """`all_agent_targets` are the summary-eligible targets, already chosen and ranked."""
+
     agent_targets = all_agent_targets[:max_targets] if max_targets else all_agent_targets
     resolved_metrics = _metrics_with_review_defaults(metrics)
     summary = _summary_with_review_defaults(as_json_object(report.get("summary")))
@@ -40,12 +31,6 @@ def agent_summary_model(
         "agent_targets": [
             _agent_target(index, target) for index, target in enumerate(agent_targets, 1)
         ],
-        "weak_recurrence_families": _weak_recurrence_families(
-            all_targets,
-            hidden_from_summary_ids={
-                str(target.get("target_id", "")) for target in all_agent_targets
-            },
-        ),
         "guardrails": _agent_guardrails(),
     }
 
@@ -91,56 +76,6 @@ def _agent_target(index: int, target: Json) -> Json:
     }
 
 
-def _weak_recurrence_families(
-    targets: list[Json],
-    *,
-    hidden_from_summary_ids: set[str],
-) -> list[Json]:
-    grouped: dict[str, list[Json]] = {}
-    for target in targets:
-        if str(target.get("target_id", "")) in hidden_from_summary_ids:
-            continue
-        family = _weak_family(target)
-        if family:
-            grouped.setdefault(family, []).append(target)
-    return [
-        {
-            "label": WEAK_FAMILY_LABELS[family],
-            "cluster_count": len(items),
-            "cluster_word": "cluster" if len(items) == 1 else "clusters",
-            "examples": [
-                _weak_family_example(item)
-                for item in sorted(items, key=_target_value_key)[:WEAK_FAMILY_EXAMPLE_LIMIT]
-            ],
-        }
-        for family, items in sorted(grouped.items(), key=lambda item: WEAK_FAMILY_LABELS[item[0]])
-    ]
-
-
-def _weak_family(target: Json) -> str:
-    finding_kind = json_text(target, "finding_kind")
-    if finding_kind in WEAK_FAMILY_LABELS:
-        return finding_kind
-    if finding_kind != "signature_only_boundary":
-        return ""
-    canonical_shape = json_text(as_json_object(target.get("metrics")), "canonical_shape")
-    tags = set(text_list(target.get("context_tags")))
-    if canonical_shape.endswith("->bool"):
-        return "tiny_predicate_boundary"
-    if "generic_boundary" in tags and canonical_shape.endswith("->str"):
-        return "generic_formatter_boundary"
-    return ""
-
-
-def _weak_family_example(target: Json) -> Json:
-    return {
-        "target_id": target.get("target_id", ""),
-        "title": target.get("title", ""),
-        "review_tier": target_review_tier(target),
-        "review_score": target.get("review_score", 0.0),
-    }
-
-
 def _metrics_with_review_defaults(metrics: Json) -> Json:
     return {
         **metrics,
@@ -156,12 +91,6 @@ def _summary_with_review_defaults(summary: Json) -> Json:
         "targets_by_review_tier": summary.get("targets_by_review_tier", {}),
         "targets_by_action_status": summary.get("targets_by_action_status", {}),
     }
-
-
-def _target_value_key(target: Json) -> tuple[float, str]:
-    value = target.get("review_score", 0.0)
-    score = float(value) if isinstance(value, int | float) else 0.0
-    return (-score, str(target.get("target_id", "")))
 
 
 def _agent_evidence_line(

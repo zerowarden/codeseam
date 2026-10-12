@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import replace
 
 from codeseam.analysis.assessment.assess import assess_target
@@ -13,6 +14,7 @@ from codeseam.analysis.findings import (
 from codeseam.analysis.findings.drafts import (
     build_intra_function_duplicate_drafts,
     build_policy_constant_drafts,
+    build_shared_block_drafts,
     build_signature_drafts,
 )
 from codeseam.analysis.findings.identity import with_target_identity
@@ -37,17 +39,18 @@ def build_findings(
             semantic_evidence=semantic_evidence,
         ),
         *build_intra_function_duplicate_drafts(signatures or []),
+        *build_shared_block_drafts(signatures or [], signature_clusters.clusters),
     ]
-    findings = [
-        with_target_identity(
+    findings = _with_unique_identities(
+        [
             assess_target(
                 draft=draft,
                 roles_by_path=facts.roles_by_path,
                 policy=assessment_policy,
             )
-        )
-        for draft in drafts
-    ]
+            for draft in drafts
+        ]
+    )
     ordered = sorted(_dedupe_equivalent_findings(findings), key=finding_sort_key)
     return [
         replace(finding, rank=index, rank_label=f"#{index}")
@@ -64,13 +67,32 @@ def finding_sort_key(finding: Finding) -> tuple[int, float, str, str]:
     )
 
 
+def _with_unique_identities(findings: list[Finding]) -> list[Finding]:
+    """Give different targets different IDs.
+
+    IDs leave out line numbers, so two targets over same-name members of one
+    file (two classes' `analyse_text`) can collide, and the output keeps only
+    one of them. Colliding targets with different member locations get
+    positional IDs instead.
+    """
+
+    identified = [with_target_identity(finding) for finding in findings]
+    surfaces: dict[str, set[tuple[object, ...]]] = defaultdict(set)
+    for finding in identified:
+        surfaces[finding.target_id].add(_finding_equivalence_key(finding))
+    return [
+        with_target_identity(finding, positional=True)
+        if len(surfaces[finding.target_id]) > 1
+        else finding
+        for finding in identified
+    ]
+
+
 def _dedupe_equivalent_findings(findings: list[Finding]) -> list[Finding]:
     """Collapse duplicate targets built through different evidence paths.
 
-    Target identity intentionally includes evidence/action details. That keeps
-    IDs stable when the model changes, but it also means overlapping candidate
-    generation paths can produce two `rt_*` IDs for the exact same members.
-    Before ranking/output, the human-facing unit is the member location set, so
+    Overlapping candidate generation paths can produce two findings over the
+    exact same members. The human-facing unit is the member location set, so
     keep only the strongest finding for each exact target surface.
     """
 

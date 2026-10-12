@@ -5,8 +5,7 @@ from collections.abc import Mapping
 
 
 def jaccard(left: set[str], right: set[str]) -> float:
-    if not left and not right:
-        return 1.0
+    """Set overlap; two empty sets share no evidence, so they score 0, not 1."""
     if not left or not right:
         return 0.0
     return round(len(left & right) / len(left | right), 4)
@@ -25,7 +24,8 @@ def mean_jaccard_by_key(
     left: Mapping[str, set[str]],
     right: Mapping[str, set[str]],
 ) -> float:
-    keys = sorted(set(left) | set(right))
+    # Keys neither side uses (e.g. a parameter both functions ignore) carry no evidence.
+    keys = sorted(key for key in set(left) | set(right) if left.get(key) or right.get(key))
     if not keys:
         return 0.0
     return round(

@@ -10,13 +10,16 @@ class RepositorySummary:
     files_analysed: int
     files_skipped: int
     functions_seen: int
+    files_failed: int = 0
 
 
 def repository_summary(summary: Json) -> RepositorySummary:
+    failed = summary.get("files_failed")
     return RepositorySummary(
         files_analysed=json_int(summary.get("files_analysed")),
         files_skipped=json_int(summary.get("files_skipped")),
         functions_seen=json_int(summary.get("functions_seen")),
+        files_failed=len(failed) if isinstance(failed, list) else 0,
     )
 
 

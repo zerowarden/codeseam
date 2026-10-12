@@ -14,7 +14,7 @@ def score_semantic_risk(
     policy: AssessmentPolicy,
 ) -> SemanticRisk:
     """Answer whether merging could change meaning or create a bad abstraction."""
-    score = metrics.max_relation_risk_score
+    score = metrics.lead_risk_score
     semantic_score, semantic_reasons = _semantic_evidence_risk(metrics, policy)
     if not score:
         risk_units = len(risks)

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import pickle
+import platform
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
 from helpers import cache_factory, cache_root
 
+import codeseam.version as version_module
+from codeseam.analysis.relations.kinds import RelationKind
+from codeseam.analysis.relations.models import TreeComparison
 from codeseam.cache import (
     CACHE_DB,
     PersistentCache,
@@ -13,9 +20,80 @@ from codeseam.cache import (
     cache_key,
     load_cache_blob,
 )
+from codeseam.cache.blobs import BLOB_MAGIC, CacheBlobError
 from codeseam.platform import Json
 
 __all__ = ["cache_factory", "cache_root"]
+
+UNPICKLE_CALLS: list[str] = []
+
+
+class _PickleProbe:
+    def __reduce__(self) -> tuple[Callable[[str], None], tuple[str]]:
+        return UNPICKLE_CALLS.append, ("executed",)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        (("value", 1), [1.5, True, "x"]),
+        {"pairs": {("a", 1): frozenset({"x"}), "b": {1, 2}}},
+        Counter({"call": 2}),
+        TreeComparison(0.5, 0.5, None, 4, "body_hash"),
+        {"kind": RelationKind.BODY_IDENTICAL, "kinds": (RelationKind.NONE,)},
+    ],
+)
+def test_cache_blob_round_trips_supported_values(payload: object) -> None:
+    restored = load_cache_blob(cache_blob(payload))
+
+    assert restored == payload
+    assert type(restored) is type(payload)
+
+
+def test_load_cache_blob_rejects_pickle_without_executing_it() -> None:
+    UNPICKLE_CALLS.clear()
+
+    with pytest.raises(CacheBlobError):
+        load_cache_blob(pickle.dumps(_PickleProbe()))
+
+    assert UNPICKLE_CALLS == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"c":"os:PathLike","f":{}}',
+        b'{"c":"codeseam.version:package_version","f":{}}',
+        b'{"c":"codeseam.cache.store:PersistentCache","f":{}}',
+        b'{"c":"codeseam.analysis.relations.models:TreeComparison","f":{"tree_similarity":1}}',
+        b'{"e":"codeseam.analysis.relations.models:TreeComparison","v":1}',
+        b'{"x":[]}',
+        b"not json",
+    ],
+)
+def test_load_cache_blob_rejects_untrusted_or_malformed_nodes(body: bytes) -> None:
+    with pytest.raises(CacheBlobError):
+        load_cache_blob(BLOB_MAGIC + body)
+
+
+def test_cache_blob_rejects_unsupported_value_types() -> None:
+    with pytest.raises(TypeError):
+        cache_blob(Path("demo"))
+
+
+def test_persistent_cache_treats_legacy_pickle_rows_as_misses(
+    cache_factory: Callable[..., PersistentCache],
+) -> None:
+    UNPICKLE_CALLS.clear()
+    cache = cache_factory()
+    cache.set_blob("analysis", "legacy", pickle.dumps(_PickleProbe()))
+    cache.close()
+
+    reopened = cache_factory()
+
+    assert reopened.get_blob_object("analysis", "legacy") is None
+    assert UNPICKLE_CALLS == []
 
 
 def test_persistent_cache_round_trips_blob_payload(
@@ -211,3 +289,23 @@ def _assert_blob_load_stats(
     assert namespace_stats["blob_load_ms"] >= 0
     assert namespace_stats["blob_load_avg_ms"] >= 0
     assert namespace_stats["blob_load_max_ms"] >= 0
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        lambda monkeypatch: monkeypatch.setattr(
+            version_module, "_installed_version", lambda name="codeseam": f"{name}-9.9"
+        ),
+        lambda monkeypatch: monkeypatch.setattr(platform, "python_version", lambda: "9.9.9"),
+    ],
+    ids=["parser-version", "python-version"],
+)
+def test_cache_versions_follow_runtime_changes(
+    monkeypatch: pytest.MonkeyPatch, patch: Callable[[pytest.MonkeyPatch], None]
+) -> None:
+    before = version_module._analysis_fingerprint()
+    patch(monkeypatch)
+
+    assert version_module._analysis_fingerprint() != before
+    assert version_module._cache_version("rel_pair").endswith(version_module.ANALYSIS_FINGERPRINT)

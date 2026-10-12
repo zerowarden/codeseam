@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from helpers import assert_contains, target_record
+from helpers import assert_contains, target_record, write_agent_sidecar
 
+from codeseam import cli
 from codeseam.cli import REPOSITORY_CONTEXT_ERROR
 
 from .fixtures import CliRunner, SidecarWriter
@@ -198,3 +199,52 @@ def test_explain_missing_id_returns_repository_context_error(
     )
 
     cli_runner(["explain", "rt_missing"], expected=REPOSITORY_CONTEXT_ERROR)
+
+
+def test_explain_and_cache_stats_find_the_repository_from_a_subdirectory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / ".git").mkdir()
+    write_agent_sidecar(
+        tmp_path, "analysis.jsonl", [{"target_id": "rt_sub", "review_tier": "observation"}]
+    )
+    subdirectory = tmp_path / "src" / "pkg"
+    subdirectory.mkdir(parents=True)
+    monkeypatch.chdir(subdirectory)
+
+    assert cli.main(["explain", "rt_sub"]) == cli.OK
+    assert "rt_sub observation" in capsys.readouterr().out
+    assert cli.main(["cache"]) == cli.OK
+    stats = json.loads(capsys.readouterr().out)
+    assert Path(stats["audit_output_root"]) == tmp_path.resolve() / ".codeseam" / "reports"
+
+
+def test_explain_pairs_show_real_scores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    body = (
+        "    rows = [line.strip() for line in text.splitlines()]\n"
+        "    return [r for r in rows if r]\n"
+    )
+    for name in ("a", "b"):
+        (tmp_path / f"{name}.py").write_text(f"def clean_{name}(text):\n{body}", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    cli.main(["analyze", "--quiet"])
+    agent = tmp_path / ".codeseam" / "reports" / "agent"
+    (target,) = [
+        json.loads(line)
+        for name in ("analysis.jsonl", "observations.jsonl")
+        for line in (agent / name).read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("structural_relation_pairs")
+    ]
+    capsys.readouterr()
+
+    assert cli.main(["explain", target["target_id"], "--pairs"]) == cli.OK
+
+    pair_line = next(line for line in capsys.readouterr().out.splitlines() if "<->" in line)
+    assert "rel=0;" not in pair_line
+    assert "refactor=0;" not in pair_line

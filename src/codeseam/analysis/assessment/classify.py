@@ -7,21 +7,21 @@ from codeseam.analysis.assessment.definitions import (
     AssessmentBand,
     AssessmentGate,
     EvidenceQuality,
+    FindingActionStatus,
     FindingReviewVisibility,
-    FindingVisibility,
     RecommendationStatus,
     ReviewTier,
 )
 from codeseam.analysis.assessment.models import (
     AbstractionFit,
     ActionAssessment,
-    ContextClassification,
     DetectionConfidence,
     MaintenancePayoff,
     SemanticRisk,
 )
 from codeseam.analysis.assessment.policy import AssessmentPolicy
 from codeseam.analysis.relations.models import ActionKind
+from codeseam.analysis.relations.policy import RELATION_ASSESSMENT_POLICY
 
 EDIT_ACTION_KINDS = frozenset(
     (
@@ -56,10 +56,7 @@ class SurfacingAssessment:
     policy: AssessmentPolicy
 
 
-def classify_review_tier(
-    assessment: SurfacingAssessment,
-    context: ContextClassification | None,
-) -> ReviewTier:
+def classify_review_tier(assessment: SurfacingAssessment) -> ReviewTier:
     review_score = review_attention_score(assessment)
     if _recommended_edit(assessment):
         tier = ReviewTier.RECOMMENDED_EDIT
@@ -69,7 +66,7 @@ def classify_review_tier(
         tier = ReviewTier.MAINTENANCE_NOTE
     else:
         tier = ReviewTier.OBSERVATION
-    return _apply_context_cap(tier, context)
+    return tier
 
 
 def review_attention_score(assessment: SurfacingAssessment) -> float:
@@ -172,17 +169,7 @@ def _local_duplicate_signal(action: ActionAssessment) -> bool:
     )
 
 
-def classify_visibility(
-    *,
-    review_tier: ReviewTier,
-    action: ActionAssessment,
-    context: ContextClassification | None,
-) -> FindingReviewVisibility:
-    del action
-    if review_tier is ReviewTier.OBSERVATION:
-        return FindingReviewVisibility.SIDECAR_ONLY
-    if context is not None:
-        return _review_visibility(context.visibility)
+def classify_visibility(review_tier: ReviewTier) -> FindingReviewVisibility:
     if review_tier in {ReviewTier.RECOMMENDED_EDIT, ReviewTier.REVIEW_CANDIDATE}:
         return FindingReviewVisibility.LISTED
     if review_tier is ReviewTier.MAINTENANCE_NOTE:
@@ -190,21 +177,46 @@ def classify_visibility(
     return FindingReviewVisibility.SIDECAR_ONLY
 
 
-def summary_eligible(
-    visibility: FindingReviewVisibility,
-    context: ContextClassification | None,
-) -> bool:
-    if context is not None:
-        return context.summary_eligible
-    return visibility is FindingReviewVisibility.LISTED
+NOTE_ACTION_STATUSES = frozenset(
+    {
+        FindingActionStatus.RECORD_SHARED_CONCERN,
+        FindingActionStatus.OBSERVE,
+        FindingActionStatus.DO_NOT_REFACTOR,
+    }
+)
+NOTE_ACTIONS = frozenset(
+    {ActionKind.RECORD_SHARED_CONCERN, ActionKind.OBSERVE, ActionKind.DO_NOT_REFACTOR}
+)
+LOW_VALUE_BANDS = frozenset({AssessmentBand.LOW, AssessmentBand.NONE})
 
 
-def _review_visibility(visibility: FindingVisibility) -> FindingReviewVisibility:
-    if visibility is FindingVisibility.AGENT_SUMMARY:
-        return FindingReviewVisibility.LISTED
-    if visibility is FindingVisibility.SUMMARY_GROUPED:
-        return FindingReviewVisibility.GROUPED
-    return FindingReviewVisibility.SIDECAR_ONLY
+@dataclass(frozen=True, slots=True)
+class SummaryInputs:
+    review_tier: ReviewTier
+    visibility: FindingReviewVisibility
+    payoff_band: AssessmentBand
+    refactorability: float
+    action_status: FindingActionStatus
+    primary_action: ActionKind
+
+
+def summary_eligible(inputs: SummaryInputs) -> bool:
+    """Whether a finding is listed in the agent summary and counted by CI.
+
+    Recommended edits are always listed. Other listed findings must be worth an
+    edit: real payoff, medium refactorability, and an edit action.
+    """
+
+    if inputs.visibility is not FindingReviewVisibility.LISTED:
+        return False
+    if inputs.review_tier is ReviewTier.RECOMMENDED_EDIT:
+        return True
+    return not (
+        inputs.payoff_band in LOW_VALUE_BANDS
+        or inputs.refactorability < RELATION_ASSESSMENT_POLICY.refactorability_medium_threshold
+        or inputs.action_status in NOTE_ACTION_STATUSES
+        or inputs.primary_action in NOTE_ACTIONS
+    )
 
 
 def _score_band(score: float, policy: AssessmentPolicy) -> AssessmentBand:
@@ -218,33 +230,6 @@ def _score_band(score: float, policy: AssessmentPolicy) -> AssessmentBand:
 def _refactor_value(value: str | AssessmentBand) -> AssessmentBand:
     band = _assessment_band(value)
     return band if band in ATTENTION_BANDS | {AssessmentBand.LOW} else AssessmentBand.NONE
-
-
-def _apply_context_cap(
-    tier: ReviewTier,
-    context: ContextClassification | None,
-) -> ReviewTier:
-    if context is None:
-        return tier
-    if not context.summary_eligible:
-        return (
-            ReviewTier.MAINTENANCE_NOTE
-            if tier in {ReviewTier.RECOMMENDED_EDIT, ReviewTier.REVIEW_CANDIDATE}
-            else ReviewTier.OBSERVATION
-        )
-    if _value(context.refactor_safety) == "unsafe":
-        return ReviewTier.OBSERVATION
-    if context.action in MAINTENANCE_NOTE_ACTION_KINDS and tier in {
-        ReviewTier.RECOMMENDED_EDIT,
-        ReviewTier.REVIEW_CANDIDATE,
-    }:
-        return ReviewTier.MAINTENANCE_NOTE
-    if tier is ReviewTier.RECOMMENDED_EDIT and _refactor_value(context.refactor_value) in {
-        AssessmentBand.NONE,
-        AssessmentBand.LOW,
-    }:
-        return ReviewTier.REVIEW_CANDIDATE
-    return tier
 
 
 def _design_concern(assessment: SurfacingAssessment) -> bool:
@@ -324,11 +309,6 @@ def _assessment_band(value: str | AssessmentBand | None) -> AssessmentBand:
         return AssessmentBand(value)
     except (TypeError, ValueError):
         return AssessmentBand.NONE
-
-
-def _value(value: object) -> str:
-    item = getattr(value, "value", value)
-    return str(item) if item is not None else ""
 
 
 __all__ = [

@@ -13,10 +13,8 @@ from codeseam.analysis import (
     ActionStatus,
     AssessmentBand,
     AssessmentBreakdown,
-    AssessmentPolicy,
     CloneClass,
     Cluster,
-    ContextClassification,
     EvidenceItem,
     EvidenceKind,
     EvidenceStrength,
@@ -28,7 +26,6 @@ from codeseam.analysis import (
     FindingMetrics,
     FindingReviewVisibility,
     FindingTargetType,
-    FindingVisibility,
     FunctionSemanticRole,
     MemberRef,
     RecommendationCap,
@@ -39,8 +36,6 @@ from codeseam.analysis import (
     RepositoryScan,
     ReviewTier,
     SemanticCapAssessment,
-    _promotable_exact_pairs,
-    _should_promote_structural_pairs,
     _structural_metrics,
     _sync_async_member_pair,
     apply_semantic_cap,
@@ -49,12 +44,16 @@ from codeseam.analysis import (
     build_repository_facts,
     semantic_cap_for,
 )
-from codeseam.analysis.assessment.findings import _dedupe_equivalent_findings
+from codeseam.analysis.assessment.findings import (
+    _dedupe_equivalent_findings,
+    _with_unique_identities,
+)
+from codeseam.analysis.findings.drafts import promotable_components, should_promote
 from codeseam.analysis.findings.identity import with_target_identity
 from codeseam.config import load_config
 from codeseam.pipeline.signatures import build_signature_artifacts
 
-POLICY = AssessmentPolicy.from_config(load_config(Path("/repo")).data)
+POLICY = load_config(Path("/repo")).assessment
 FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "signatures"
 EXPECTED_MEMBER_PATH_COUNT = 2
 EXPECTED_ALL_PAIR_COUNT = 2
@@ -94,13 +93,13 @@ def test_clean_clone_is_recommended_edit() -> None:
             "structural_duplicate_pair_count": 1,
             "structural_relation_pair_count": 1,
             "body_hash_match_count": 1,
-            "max_tree_similarity": 1.0,
+            "lead_tree_similarity": 1.0,
             "relation_kind_counts": {RelationKind.BODY_IDENTICAL: 1},
             "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.95,
-            "max_refactorability_score": 0.8,
-            "max_abstraction_cost_score": 0.22,
-            "max_relation_risk_score": 0.0,
+            "lead_confidence_score": 0.95,
+            "lead_refactorability_score": 0.8,
+            "lead_abstraction_cost_score": 0.22,
+            "lead_risk_score": 0.0,
             "__line_span": 120,
         },
         actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
@@ -120,13 +119,13 @@ def test_small_clean_clone_is_recommended_edit() -> None:
             "structural_duplicate_pair_count": 1,
             "structural_relation_pair_count": 1,
             "body_hash_match_count": 1,
-            "max_tree_similarity": 1.0,
+            "lead_tree_similarity": 1.0,
             "relation_kind_counts": {RelationKind.BODY_IDENTICAL: 1},
             "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.95,
-            "max_refactorability_score": 0.8,
-            "max_abstraction_cost_score": 0.22,
-            "max_relation_risk_score": 0.0,
+            "lead_confidence_score": 0.95,
+            "lead_refactorability_score": 0.8,
+            "lead_abstraction_cost_score": 0.22,
+            "lead_risk_score": 0.0,
         },
         actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
@@ -177,6 +176,13 @@ def test_small_clean_clone_is_recommended_edit() -> None:
             ActionKind.RECORD_SHARED_CONCERN,
             "record_shared_concern",
         ),
+        (
+            {FunctionSemanticRole.TRIVIAL_BODY.value: 2},
+            {},
+            "maintenance_note",
+            ActionKind.RECORD_SHARED_CONCERN,
+            "record_shared_concern",
+        ),
     ),
 )
 def test_semantic_role_caps_demote_protocol_surface_clones(
@@ -192,13 +198,13 @@ def test_semantic_role_caps_demote_protocol_surface_clones(
             "structural_duplicate_pair_count": 1,
             "structural_relation_pair_count": 1,
             "body_hash_match_count": 1,
-            "max_tree_similarity": 1.0,
+            "lead_tree_similarity": 1.0,
             "relation_kind_counts": {RelationKind.BODY_IDENTICAL: 1},
             "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.95,
-            "max_refactorability_score": 0.8,
-            "max_abstraction_cost_score": 0.22,
-            "max_relation_risk_score": 0.0,
+            "lead_confidence_score": 0.95,
+            "lead_refactorability_score": 0.8,
+            "lead_abstraction_cost_score": 0.22,
+            "lead_risk_score": 0.0,
             "max_body_line_count": 3,
             "semantic_role_counts": role_counts,
             **cap_counts,
@@ -221,16 +227,16 @@ def test_constructor_duplication_steers_to_shared_helper_review() -> None:
             "structural_duplicate_pair_count": 1,
             "structural_relation_pair_count": 1,
             "body_hash_match_count": 1,
-            "max_tree_similarity": 1.0,
+            "lead_tree_similarity": 1.0,
             "relation_kind_counts": {RelationKind.BODY_IDENTICAL: 1},
             "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.95,
-            "max_refactorability_score": 0.8,
-            "max_abstraction_cost_score": 0.22,
-            "max_relation_risk_score": 0.0,
+            "lead_confidence_score": 0.95,
+            "lead_refactorability_score": 0.8,
+            "lead_abstraction_cost_score": 0.22,
+            "lead_risk_score": 0.0,
             "max_body_line_count": 14,
             "min_body_line_count": 14,
-            "max_stable_statement_count": 6,
+            "lead_stable_statement_count": 6,
             "min_stable_statement_count": 6,
             "same_directory_relation_count": 1,
             "semantic_role_counts": {
@@ -270,7 +276,9 @@ def test_constructor_majority_steers_to_shared_helper_review() -> None:
     assert target.primary_action == ActionKind.EXTRACT_SMALL_HELPER
 
 
-def test_tiny_constructor_majority_is_maintenance_note() -> None:
+def test_small_constructor_majority_still_steers_to_review() -> None:
+    # Constructor merges change a class hierarchy whatever their size; only
+    # one-operation constructors drop to notes, through the trivial-body cap.
     target = _assess(
         _clean_clone_metrics(
             role_counts={
@@ -287,8 +295,8 @@ def test_tiny_constructor_majority_is_maintenance_note() -> None:
         evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
     )
 
-    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
-    assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
+    assert target.review_tier is not ReviewTier.RECOMMENDED_EDIT
+    assert target.primary_action == ActionKind.EXTRACT_SMALL_HELPER
 
 
 def test_public_api_mirror_needs_substantial_local_evidence_for_review() -> None:
@@ -357,47 +365,18 @@ def test_command_registry_surface_caps_edit_to_maintenance_note() -> None:
     assert any("adapter/API boundary" in reason for reason in target.downgrade_reasons)
 
 
-def test_parameterized_predicate_boundary_caps_to_maintenance_note() -> None:
-    metrics = _clean_clone_metrics(
-        role_counts={FunctionSemanticRole.PREDICATE_BOUNDARY.value: 2},
-        body_lines=3,
-        stable_statements=2,
-        same_directory_relation_count=1,
-    )
-    metrics.update(
-        {
-            "body_hash_match_count": 0,
-            "relation_kind_counts": {RelationKind.BODY_PARAMETERIZED: 1},
-        }
-    )
-    target = _assess(
-        metrics,
-        actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
-        evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
-    )
-
-    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
-    assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
-    assert any("predicate boundary variants" in reason for reason in target.downgrade_reasons)
-
-
-def test_exact_predicate_boundary_clone_can_still_be_recommended() -> None:
-    target = _assess(
-        _clean_clone_metrics(
-            role_counts={FunctionSemanticRole.PREDICATE_BOUNDARY.value: 2},
-            body_lines=3,
-            stable_statements=2,
-            same_directory_relation_count=1,
-        ),
-        actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
-        evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
-    )
-
-    assert target.review_tier is ReviewTier.RECOMMENDED_EDIT
-    assert target.primary_action == ActionKind.CONSOLIDATE_CLONE
-
-
-def test_sparse_promoted_pair_evidence_caps_broad_parent_cluster() -> None:
+@pytest.mark.parametrize(
+    ("coverage", "reason"),
+    [
+        ({"promoted_pair_count": 1, "promoted_member_count": 2}, "Clone evidence was promoted"),
+        # A guarded pair (two `pass` stubs) is never promoted, but must not profile its parent.
+        ({"pair_member_count": 2}, "Pair evidence covers only some members"),
+    ],
+    ids=["promoted", "not-promoted"],
+)
+def test_sparse_pair_evidence_caps_broad_parent_cluster(
+    coverage: dict[str, int], reason: str
+) -> None:
     target = _assess(
         _clean_clone_metrics(
             role_counts={FunctionSemanticRole.NORMAL_FUNCTION.value: 8},
@@ -408,8 +387,7 @@ def test_sparse_promoted_pair_evidence_caps_broad_parent_cluster() -> None:
                 "member_count": 8,
                 "structural_duplicate_pair_count": 1,
                 "structural_relation_pair_count": 1,
-                "promoted_exact_pair_count": 1,
-                "promoted_exact_pair_member_count": 2,
+                **coverage,
             },
         ),
         actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
@@ -418,7 +396,7 @@ def test_sparse_promoted_pair_evidence_caps_broad_parent_cluster() -> None:
 
     assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
-    assert any("Exact pair evidence was promoted" in reason for reason in target.downgrade_reasons)
+    assert any(reason in item for item in target.downgrade_reasons)
 
 
 def test_promoted_pair_parent_cap_wins_over_test_review_cap() -> None:
@@ -432,8 +410,8 @@ def test_promoted_pair_parent_cap_wins_over_test_review_cap() -> None:
                 "member_count": 3,
                 "structural_duplicate_pair_count": 0,
                 "structural_relation_pair_count": 1,
-                "promoted_exact_pair_count": 1,
-                "promoted_exact_pair_member_count": 2,
+                "promoted_pair_count": 1,
+                "promoted_member_count": 2,
                 "test_member_count": 3,
                 "test_relation_pair_count": 1,
                 "guardrail_relation_pair_count": 1,
@@ -445,7 +423,7 @@ def test_promoted_pair_parent_cap_wins_over_test_review_cap() -> None:
 
     assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
     assert target.primary_action == ActionKind.RECORD_SHARED_CONCERN
-    assert any("Exact pair evidence was promoted" in reason for reason in target.downgrade_reasons)
+    assert any("Clone evidence was promoted" in reason for reason in target.downgrade_reasons)
 
 
 def test_promoted_pair_cap_does_not_apply_when_pair_members_cover_parent() -> None:
@@ -454,8 +432,8 @@ def test_promoted_pair_cap_does_not_apply_when_pair_members_cover_parent() -> No
             member_count=3,
             structural_duplicate_pair_count=3,
             structural_relation_pair_count=3,
-            promoted_exact_pair_count=3,
-            promoted_exact_pair_member_count=3,
+            promoted_pair_count=3,
+            promoted_member_count=3,
             semantic_role_counts={FunctionSemanticRole.NORMAL_FUNCTION.value: 3},
         ),
         POLICY,
@@ -953,8 +931,70 @@ def test_exact_pair_inside_broad_cluster_is_promoted(tmp_path: Path) -> None:
     assert len(promoted) == 1
     assert promoted[0].review_tier is ReviewTier.RECOMMENDED_EDIT
     assert promoted[0].primary_action == ActionKind.CONSOLIDATE_CLONE
-    assert "Inspect this exact duplicate pair" in promoted[0].suggested_refactor_direction
+    assert "Inspect these duplicates" in promoted[0].suggested_refactor_direction
     assert len(promoted[0].structural_relation_pairs) == 1
+
+
+SENTINEL_REPRS = """
+class NotSetA:
+    def __repr__(self) -> str:
+        return "<notset>"
+
+
+class NotSetB:
+    def __repr__(self) -> str:
+        return "<notset>"
+"""
+
+
+def test_tiny_special_method_clones_count_every_member_and_stay_notes(tmp_path: Path) -> None:
+    source_path = "src/sentinels.py"
+    (tmp_path / "src").mkdir()
+    (tmp_path / source_path).write_text(SENTINEL_REPRS, encoding="utf-8")
+    facts = _source_repository_facts(source_path)
+    artifacts = build_signature_artifacts(load_config(tmp_path), facts, [])
+
+    (target,) = build_findings(artifacts.clusters, facts, POLICY)
+
+    special = FunctionSemanticRole.PYTHON_SPECIAL_METHOD.value
+    assert target.metrics.semantic_role_counts[special] == target.metrics.member_count
+    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
+
+
+def test_targets_over_same_name_members_of_one_file_keep_distinct_ids() -> None:
+    target = _assess(
+        {"member_count": 2, "structural_duplicate_pair_count": 1, "body_hash_match_count": 1},
+        actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
+    )
+
+    def at(*lines: int) -> Finding:
+        return replace(
+            target,
+            locations=tuple(
+                FindingLocation("src/lexers.py", line, line + 1, "signature", "shape", "score")
+                for line in lines
+            ),
+        )
+
+    first, second, same = _with_unique_identities([at(10, 20), at(30, 40), at(10, 20)])
+
+    assert first.target_id != second.target_id
+    assert first.target_id == same.target_id
+    assert with_target_identity(at(10, 20)).target_id == with_target_identity(at(30, 40)).target_id
+
+    def in_classes(*containers: str) -> Finding:
+        return replace(
+            target,
+            locations=tuple(
+                FindingLocation("src/lexers.py", 1, 2, "signature", "shape", "score", "", name)
+                for name in containers
+            ),
+        )
+
+    assert (
+        with_target_identity(in_classes("A", "B")).target_id
+        != with_target_identity(in_classes("C", "D")).target_id
+    )
 
 
 def test_equivalent_location_targets_are_deduped_before_ranking() -> None:
@@ -964,9 +1004,9 @@ def test_equivalent_location_targets_are_deduped_before_ranking() -> None:
                 "member_count": 2,
                 "structural_relation_pair_count": 1,
                 "same_role_relation_count": 1,
-                "max_relation_confidence_score": 0.95,
-                "max_refactorability_score": 0.2,
-                "max_relation_risk_score": 0.1,
+                "lead_confidence_score": 0.95,
+                "lead_refactorability_score": 0.2,
+                "lead_risk_score": 0.1,
             },
             actions=(_action(ActionKind.RECORD_SHARED_CONCERN, confidence=0.95),),
         )
@@ -978,13 +1018,13 @@ def test_equivalent_location_targets_are_deduped_before_ranking() -> None:
                 "structural_duplicate_pair_count": 1,
                 "structural_relation_pair_count": 1,
                 "body_hash_match_count": 1,
-                "max_tree_similarity": 1.0,
+                "lead_tree_similarity": 1.0,
                 "relation_kind_counts": {RelationKind.BODY_IDENTICAL: 1},
                 "same_role_relation_count": 1,
-                "max_relation_confidence_score": 0.95,
-                "max_refactorability_score": 0.8,
-                "max_abstraction_cost_score": 0.22,
-                "max_relation_risk_score": 0.0,
+                "lead_confidence_score": 0.95,
+                "lead_refactorability_score": 0.8,
+                "lead_abstraction_cost_score": 0.22,
+                "lead_risk_score": 0.0,
                 "__line_span": 120,
             },
             actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
@@ -994,7 +1034,7 @@ def test_equivalent_location_targets_are_deduped_before_ranking() -> None:
 
     deduped = _dedupe_equivalent_findings([weaker, stronger])
 
-    assert weaker.target_id != stronger.target_id
+    assert weaker.target_id == stronger.target_id  # verdicts are not identity
     assert deduped == [stronger]
 
 
@@ -1034,11 +1074,10 @@ def test_structural_duplicate_pairs_contribute_to_relation_metrics() -> None:
 
     assert metrics["same_role_relation_count"] == 1
     assert metrics["same_directory_relation_count"] == 1
-    assert metrics["max_relatedness_score"] == EXPECTED_RELATEDNESS
-    assert metrics["max_refactorability_score"] == EXPECTED_REFACTORABILITY
-    assert metrics["max_relation_confidence_score"] == EXPECTED_CONFIDENCE
+    assert metrics["lead_relatedness_score"] == EXPECTED_RELATEDNESS
+    assert metrics["lead_refactorability_score"] == EXPECTED_REFACTORABILITY
+    assert metrics["lead_confidence_score"] == EXPECTED_CONFIDENCE
     assert metrics["relation_kind_counts"] == {RelationKind.BODY_IDENTICAL.value: 1}
-    assert metrics["clone_type_counts"] == {CloneClass.TYPE_1_EXACT.value: 1}
     assert metrics["guardrail_relation_pair_count"] == 1
 
 
@@ -1052,8 +1091,32 @@ def test_structural_metric_kind_counts_include_duplicate_and_variant_pairs() -> 
         RelationKind.BODY_IDENTICAL.value: 1,
         RelationKind.COMMON_WRAPPER_DIFFERENT_CORE.value: 1,
     }
-    assert metrics["clone_type_counts"] == {CloneClass.TYPE_1_EXACT.value: EXPECTED_ALL_PAIR_COUNT}
     assert metrics["guardrail_relation_pair_count"] == EXPECTED_ALL_PAIR_COUNT
+
+
+def test_structural_metrics_count_a_pair_listed_twice_once() -> None:
+    pair = _relation_pair_fixture()
+
+    metrics = _structural_metrics([pair], [pair], [])
+
+    assert metrics["guardrail_relation_pair_count"] == 1
+    assert metrics["body_hash_match_count"] == 1
+
+
+def test_structural_metrics_profile_comes_from_one_lead_pair() -> None:
+    lead_scores, lead_shape = (0.8, 0.5, 0.95), (12, 12, 2)
+    weaker_scores, weaker_shape = (0.9, 0.9, 0.6), (20, 20, 6)
+    lead = _relation_pair_fixture(scores=lead_scores, shape=lead_shape)
+    weaker = _relation_pair_fixture(left_symbol="other", scores=weaker_scores, shape=weaker_shape)
+
+    metrics = _structural_metrics([], [weaker, lead], [])
+
+    # Every profile metric comes from the highest-confidence pair, not per-axis maxima.
+    assert metrics["lead_confidence_score"] == lead_scores[2]
+    assert metrics["lead_refactorability_score"] == lead_scores[1]
+    assert metrics["lead_stable_statement_count"] == lead_shape[2]
+    # Extent guards stay cluster-wide on purpose.
+    assert metrics["max_body_line_count"] == weaker_shape[0]
 
 
 def test_structural_metrics_count_test_duplicate_pair_guardrails() -> None:
@@ -1080,7 +1143,7 @@ def test_tiny_protocol_exact_pair_is_not_promoted_as_standalone_target() -> None
         shape=(2, 2, 1),
     )
 
-    assert _promotable_exact_pairs([pair]) == []
+    assert promotable_components([pair]) == []
 
 
 def test_one_sided_tiny_protocol_exact_pair_is_not_promoted() -> None:
@@ -1089,13 +1152,43 @@ def test_one_sided_tiny_protocol_exact_pair_is_not_promoted() -> None:
         shape=(12, 2, 6),
     )
 
-    assert _promotable_exact_pairs([pair]) == []
+    assert promotable_components([pair]) == []
 
 
 def test_non_guarded_exact_pair_with_substantial_stable_body_is_promoted() -> None:
     pair = _relation_pair_fixture(shape=(12, 12, 6))
 
-    assert _promotable_exact_pairs([pair]) == [pair]
+    assert promotable_components([pair]) == [[pair]]
+
+
+def _near_miss(pair: RelationPair, confidence: float) -> RelationPair:
+    near = cast(Any, pair)
+    near.flags = SimpleNamespace(body_hash_match=False)
+    near.clone_type = CloneClass.TYPE_3_NEAR_MISS
+    near.scores.confidence = confidence
+    return pair
+
+
+@pytest.mark.parametrize(("confidence", "promoted"), [(0.8, True), (0.6, False)])
+def test_near_miss_clone_pairs_are_promoted_when_the_relation_is_strong(
+    confidence: float,
+    promoted: bool,
+) -> None:
+    pair = _near_miss(_relation_pair_fixture(shape=(12, 12, 6)), confidence)
+
+    assert promotable_components([pair]) == ([[pair]] if promoted else [])
+
+
+def test_clone_pairs_sharing_members_form_one_component() -> None:
+    # The fixture puts left members in src/a.py and right members in src/b.py,
+    # so "b" is the same function in both of the first two pairs.
+    a_b = _relation_pair_fixture(left_symbol="a", right_symbol="b", shape=(12, 12, 6))
+    c_b = _relation_pair_fixture(left_symbol="c", right_symbol="b", shape=(12, 12, 6))
+    d_e = _relation_pair_fixture(left_symbol="d", right_symbol="e", shape=(12, 12, 6))
+
+    components = promotable_components([d_e, c_b, a_b])
+
+    assert sorted(len(component) for component in components) == [1, 2]
 
 
 def test_exact_pairs_covering_whole_cluster_are_not_promoted_as_duplicate_targets() -> None:
@@ -1111,12 +1204,23 @@ def test_exact_pairs_covering_whole_cluster_are_not_promoted_as_duplicate_target
     )
 
     assert (
-        _should_promote_structural_pairs(
+        should_promote(
             cast(Cluster, SimpleNamespace(member_count=3)),
-            [left_middle, middle_right],
+            [[left_middle, middle_right]],
             [left_middle, middle_right],
         )
         is False
+    )
+
+
+def test_disjoint_components_covering_the_cluster_are_promoted() -> None:
+    first = _relation_pair_fixture(left_symbol="a", right_symbol="b", shape=(12, 12, 6))
+    second = _relation_pair_fixture(left_symbol="c", right_symbol="d", shape=(12, 12, 6))
+
+    assert should_promote(
+        cast(Cluster, SimpleNamespace(member_count=4)),
+        [[first], [second]],
+        [first, second],
     )
 
 
@@ -1124,9 +1228,9 @@ def test_sparse_exact_pairs_in_broad_cluster_are_promoted_for_narrow_review() ->
     pair = _relation_pair_fixture(shape=(12, 12, 6))
 
     assert (
-        _should_promote_structural_pairs(
+        should_promote(
             cast(Cluster, SimpleNamespace(member_count=6)),
-            [pair],
+            [[pair]],
             [pair],
         )
         is True
@@ -1154,14 +1258,13 @@ def test_mixed_high_risk_clone_uses_safety_stop() -> None:
             "member_count": 3,
             "structural_relation_pair_count": 2,
             "body_hash_match_count": 1,
-            "max_tree_similarity": 1.0,
+            "lead_tree_similarity": 1.0,
             "relation_kind_counts": {RelationKind.BODY_PARAMETERIZED: 1},
             "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.97,
-            "max_refactorability_score": 0.89,
-            "max_abstraction_cost_score": 0.44,
-            "max_relation_risk_score": 0.51,
-            "max_tree_node_count": 96,
+            "lead_confidence_score": 0.97,
+            "lead_refactorability_score": 0.89,
+            "lead_abstraction_cost_score": 0.44,
+            "lead_risk_score": 0.51,
         },
         actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.97),),
     )
@@ -1178,14 +1281,14 @@ def test_introduce_abstraction_without_hole_evidence_records_shared_concern() ->
             "structural_relation_pair_count": 1,
             "relation_kind_counts": {RelationKind.COMMON_WRAPPER_DIFFERENT_CORE: 1},
             "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.7321,
-            "max_relatedness_score": 0.7958,
-            "max_refactorability_score": 0.72,
-            "max_abstraction_cost_score": 0.22,
-            "max_relation_risk_score": 0.16,
-            "max_stable_statement_count": 2,
-            "max_hole_count": 0,
-            "max_hole_size": 0,
+            "lead_confidence_score": 0.7321,
+            "lead_relatedness_score": 0.7958,
+            "lead_refactorability_score": 0.72,
+            "lead_abstraction_cost_score": 0.22,
+            "lead_risk_score": 0.16,
+            "lead_stable_statement_count": 2,
+            "lead_hole_count": 0,
+            "lead_hole_size": 0,
         },
         actions=(_action(ActionKind.INTRODUCE_ABSTRACTION, confidence=0.72),),
         abstraction_kind=AbstractionKind.EXTRACT_HELPER,
@@ -1202,9 +1305,9 @@ def test_high_detection_low_value_note_action_is_not_review_candidate() -> None:
             "member_count": 2,
             "structural_relation_pair_count": 1,
             "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.95,
-            "max_refactorability_score": 0.2,
-            "max_relation_risk_score": 0.1,
+            "lead_confidence_score": 0.95,
+            "lead_refactorability_score": 0.2,
+            "lead_risk_score": 0.1,
         },
         actions=(_action(ActionKind.RECORD_SHARED_CONCERN, confidence=0.95),),
     )
@@ -1221,9 +1324,9 @@ def test_high_value_design_concern_can_be_review_candidate() -> None:
             "structural_duplicate_pair_count": 1,
             "structural_relation_pair_count": 3,
             "same_role_relation_count": 3,
-            "max_relation_confidence_score": 0.95,
-            "max_refactorability_score": 0.3,
-            "max_relation_risk_score": 0.72,
+            "lead_confidence_score": 0.95,
+            "lead_refactorability_score": 0.3,
+            "lead_risk_score": 0.72,
             "__line_span": 200,
         },
         actions=(_action(ActionKind.RECORD_SHARED_CONCERN, confidence=0.95),),
@@ -1234,71 +1337,16 @@ def test_high_value_design_concern_can_be_review_candidate() -> None:
     assert target.visibility is FindingReviewVisibility.LISTED
 
 
-def test_context_can_cap_numeric_review_tier() -> None:
-    target = _assess_context(
-        {
-            "member_count": 2,
-            "structural_duplicate_pair_count": 1,
-            "structural_relation_pair_count": 1,
-            "body_hash_match_count": 1,
-            "max_tree_similarity": 1.0,
-            "relation_kind_counts": {RelationKind.BODY_IDENTICAL: 1},
-            "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.95,
-            "max_refactorability_score": 0.8,
-            "max_abstraction_cost_score": 0.22,
-            "max_relation_risk_score": 0.0,
-            "__line_span": 120,
-        },
-        _context(summary_eligible=False),
-    )
-
-    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
-    assert target.visibility is FindingReviewVisibility.SIDECAR_ONLY
-
-
-def test_maintenance_note_context_caps_review_candidate() -> None:
-    target = _assess_context(
-        {
-            "member_count": 3,
-            "structural_duplicate_pair_count": 1,
-            "structural_relation_pair_count": 1,
-            "body_hash_match_count": 1,
-            "max_tree_similarity": 1.0,
-            "relation_kind_counts": {RelationKind.BODY_IDENTICAL: 1},
-            "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.95,
-            "max_refactorability_score": 0.8,
-            "max_abstraction_cost_score": 0.22,
-            "max_relation_risk_score": 0.0,
-            "__line_span": 120,
-        },
-        _context(summary_eligible=True),
-    )
-
-    assert target.review_tier is ReviewTier.MAINTENANCE_NOTE
-    assert target.visibility is FindingReviewVisibility.SIDECAR_ONLY
-
-
 def test_observation_tier_forces_sidecar_visibility() -> None:
-    target = _assess_context(
+    target = _assess(
         {
             "member_count": 2,
             "structural_relation_pair_count": 1,
             "same_role_relation_count": 1,
-            "max_relation_confidence_score": 0.1,
-            "max_refactorability_score": 0.1,
+            "lead_confidence_score": 0.1,
+            "lead_refactorability_score": 0.1,
         },
-        ContextClassification(
-            kind="fixture_context",
-            context_tags=(),
-            visibility=FindingVisibility.AGENT_SUMMARY,
-            summary_eligible=True,
-            action=ActionKind.RECORD_SHARED_CONCERN,
-            refactor_value="low",
-            refactor_safety="safe",
-            downgrade_reasons=(),
-        ),
+        actions=(_action(ActionKind.RECORD_SHARED_CONCERN, confidence=0.8),),
     )
 
     assert target.review_tier is ReviewTier.OBSERVATION
@@ -1312,11 +1360,10 @@ def test_policy_constant_duplicate_fit_can_still_be_maintenance_note() -> None:
             "policy_constant_duplicate_count": 1,
             "structural_relation_pair_count": 1,
             "same_role_relation_count": 1,
-            "max_name_similarity": 1.0,
-            "max_relatedness_score": 1.0,
-            "max_refactorability_score": 0.92,
-            "max_relation_confidence_score": 0.98,
-            "max_relation_risk_score": 0.04,
+            "lead_relatedness_score": 1.0,
+            "lead_refactorability_score": 0.92,
+            "lead_confidence_score": 0.98,
+            "lead_risk_score": 0.04,
         },
         actions=(_action(ActionKind.INTRODUCE_ABSTRACTION, confidence=0.96),),
         evidence_kinds=(EvidenceKind.POLICY_CONSTANT_DUPLICATE,),
@@ -1333,10 +1380,7 @@ def test_policy_constant_duplicate_fit_can_still_be_maintenance_note() -> None:
 
 def test_callable_factory_remains_low_tier_context() -> None:
     target = _assess(
-        {
-            "member_count": 2,
-            "call_fingerprint_count": 1,
-        },
+        {"member_count": 2},
         evidence_kinds=(EvidenceKind.CALLABLE_FACTORY, EvidenceKind.CALLSITE_IMMEDIATE),
         abstraction_kind=AbstractionKind.COMPILER_FACTORY,
     )
@@ -1367,37 +1411,6 @@ def _assess(
     )
 
 
-def _assess_context(
-    metrics: dict[str, object],
-    context: ContextClassification,
-) -> Finding:
-    draft = _draft(
-        metrics,
-        actions=(_action(ActionKind.CONSOLIDATE_CLONE, confidence=0.8),),
-        evidence_kinds=(EvidenceKind.STRUCTURAL_DUPLICATE,),
-        has_signature_overlap=False,
-        abstraction_kind=AbstractionKind.TRACK_ONLY,
-    )
-    return assess_target(
-        replace(draft, context_classifications=[context]),
-        roles_by_path={"src/a.py": "source", "src/b.py": "source"},
-        policy=POLICY,
-    )
-
-
-def _context(*, summary_eligible: bool) -> ContextClassification:
-    return ContextClassification(
-        kind="fixture_context",
-        context_tags=(),
-        visibility=FindingVisibility.SIDECAR_ONLY,
-        summary_eligible=summary_eligible,
-        action=ActionKind.RECORD_SHARED_CONCERN,
-        refactor_value="low",
-        refactor_safety="safe",
-        downgrade_reasons=(),
-    )
-
-
 def _clean_clone_metrics(
     *,
     role_counts: dict[str, int],
@@ -1407,22 +1420,22 @@ def _clean_clone_metrics(
     cap_counts: dict[str, int] | None = None,
 ) -> dict[str, object]:
     max_body_line_count, min_body_line_count = _max_min(body_lines)
-    max_stable_statement_count, min_stable_statement_count = _max_min(stable_statements)
+    lead_stable_statement_count, min_stable_statement_count = _max_min(stable_statements)
     return {
         "member_count": 2,
         "structural_duplicate_pair_count": 1,
         "structural_relation_pair_count": 1,
         "body_hash_match_count": 1,
-        "max_tree_similarity": 1.0,
+        "lead_tree_similarity": 1.0,
         "relation_kind_counts": {RelationKind.BODY_IDENTICAL: 1},
         "same_role_relation_count": 1,
-        "max_relation_confidence_score": 0.95,
-        "max_refactorability_score": 0.8,
-        "max_abstraction_cost_score": 0.22,
-        "max_relation_risk_score": 0.0,
+        "lead_confidence_score": 0.95,
+        "lead_refactorability_score": 0.8,
+        "lead_abstraction_cost_score": 0.22,
+        "lead_risk_score": 0.0,
         "max_body_line_count": max_body_line_count,
         "min_body_line_count": min_body_line_count,
-        "max_stable_statement_count": max_stable_statement_count,
+        "lead_stable_statement_count": lead_stable_statement_count,
         "min_stable_statement_count": min_stable_statement_count,
         "same_directory_relation_count": same_directory_relation_count,
         "semantic_role_counts": role_counts,
@@ -1542,7 +1555,7 @@ def _relation_pair_fixture(  # noqa: PLR0913
             max_body_line_count=max_body_line_count,
             min_body_line_count=min_body_line_count,
             delta_kinds=(),
-            clone_type=CloneClass.TYPE_1_EXACT,
+            clone_type=CloneClass.TYPE_2_PARAMETERIZED,
         ),
     )
 
@@ -1574,7 +1587,7 @@ def _source_file_record(path: str, *, language: str = "Python") -> FileRecord:
         language=language,
         size_bytes=0,
         line_count=0,
-        content_hash="sha256:test",
+        content_hash="",
         role="source",
         is_generated=False,
         is_vendor=False,

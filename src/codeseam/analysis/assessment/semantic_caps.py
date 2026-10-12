@@ -30,7 +30,6 @@ NON_EDIT_ACTIONS = frozenset(
     }
 )
 EDIT_STATUSES = frozenset({FindingActionStatus.RECOMMENDED_EDIT})
-PREDICATE_PARAMETERIZED_RELATION_KINDS = frozenset({RelationKind.BODY_PARAMETERIZED})
 TEST_HELPER_PAIR_MEMBER_COUNT = 2
 CAP_ORDER: dict[ReviewTier, int] = {
     ReviewTier.RECOMMENDED_EDIT: 0,
@@ -73,9 +72,9 @@ def semantic_cap_for(
     dominant_ratio = policy.semantic_caps.dominant_member_ratio
     for cap in (
         _declaration_or_interface_cap(metrics, dominant_ratio),
-        _promoted_pair_parent_cap(metrics, policy),
+        _trivial_body_cap(metrics, dominant_ratio),
+        _broad_parent_cap(metrics, policy),
         _path_context_cap(metrics, policy, dominant_ratio),
-        _predicate_boundary_cap(metrics, dominant_ratio),
         _relation_surface_cap(metrics, policy, roles, dominant_ratio),
         _constructor_surface_cap(metrics, policy, dominant_ratio),
         _special_method_cap(metrics, policy, dominant_ratio),
@@ -118,6 +117,23 @@ def _declaration_or_interface_cap(
     return None
 
 
+def _trivial_body_cap(
+    metrics: FindingMetrics,
+    dominant_ratio: float,
+) -> SemanticCapAssessment | None:
+    if _all_or_most(
+        _role_count(metrics, FunctionSemanticRole.TRIVIAL_BODY),
+        metrics.member_count,
+        dominant_ratio,
+    ):
+        return _cap(
+            RecommendationCap.MAX_MAINTENANCE_NOTE,
+            "Semantic role cap: one-operation bodies are tracked; a shared helper would be "
+            "no shorter than the code it replaces.",
+        )
+    return None
+
+
 def _path_context_cap(
     metrics: FindingMetrics,
     policy: AssessmentPolicy,
@@ -152,61 +168,35 @@ def _path_context_cap(
     return None
 
 
-def _promoted_pair_parent_cap(
+def _broad_parent_cap(
     metrics: FindingMetrics,
     policy: AssessmentPolicy,
 ) -> SemanticCapAssessment | None:
-    """Cap broad parents when exact-pair evidence was split out.
+    """Cap broad parents whose pair evidence covers only a minority of members.
 
-    Exact pair promotion means the draft builder found a narrower edit target
-    inside a broader signature family. The parent still carries useful
-    detection context, but it should not also become a whole-cluster edit when
-    the promoted pair members do not cover most of the parent members.
+    The parent still carries useful detection context, but one pair's profile
+    (often a guarded pair, such as two `pass` stubs, that is never promoted) must
+    not turn a large signature family into a whole-cluster edit.
     """
 
+    promoted = metrics.promoted_pair_count > 0
+    covered = metrics.promoted_member_count if promoted else metrics.pair_member_count
     if (
-        metrics.promoted_exact_pair_count > 0
+        covered > 0
         and metrics.member_count > 0
         and not _all_or_most(
-            metrics.promoted_exact_pair_member_count,
-            metrics.member_count,
-            policy.semantic_caps.dominant_member_ratio,
+            covered, metrics.member_count, policy.semantic_caps.dominant_member_ratio
         )
     ):
         return _cap(
             RecommendationCap.MAX_MAINTENANCE_NOTE,
-            (
-                "Exact pair evidence was promoted into narrower targets; the broad "
-                "parent cluster is tracked instead of edited."
-            ),
+            "Clone evidence was promoted into narrower targets; the broad parent cluster is "
+            "tracked instead of edited."
+            if promoted
+            else "Pair evidence covers only some members; the broad cluster is tracked "
+            "instead of edited.",
         )
     return None
-
-
-def _predicate_boundary_cap(
-    metrics: FindingMetrics,
-    dominant_ratio: float,
-) -> SemanticCapAssessment | None:
-    """Cap parameterized predicate families without hiding exact clones.
-
-    Tiny boolean predicates often share a control skeleton while answering
-    different questions. That is useful recurrence evidence, but a
-    parameterized predicate relation is not by itself a safe edit. Exact
-    body-identical predicate clones still flow through the ordinary clone path.
-    """
-
-    if not _all_or_most(
-        _role_count(metrics, FunctionSemanticRole.PREDICATE_BOUNDARY),
-        metrics.member_count,
-        dominant_ratio,
-    ):
-        return None
-    if not has_relation_kind(metrics, PREDICATE_PARAMETERIZED_RELATION_KINDS):
-        return None
-    return _cap(
-        RecommendationCap.MAX_MAINTENANCE_NOTE,
-        "Semantic role cap: predicate boundary variants are tracked instead of edited.",
-    )
 
 
 def _relation_surface_cap(
@@ -253,7 +243,7 @@ def _constructor_surface_cap(
         metrics=metrics,
         threshold=dominant_ratio,
     ):
-        return _constructor_cap(metrics, policy)
+        return _constructor_cap()
     return None
 
 
@@ -393,22 +383,16 @@ def _api_surface_cap(
     )
 
 
-def _constructor_cap(
-    metrics: FindingMetrics,
-    policy: AssessmentPolicy,
-) -> SemanticCapAssessment:
-    if _substantial_shared_logic(metrics, policy):
-        return SemanticCapAssessment(
-            RecommendationCap.MAX_REVIEW_CANDIDATE,
-            (
-                "Semantic role cap: constructors should share setup helpers rather than be "
-                "consolidated directly.",
-            ),
-            primary_action=ActionKind.EXTRACT_SMALL_HELPER,
-        )
+def _constructor_cap() -> SemanticCapAssessment:
+    # Merging constructors changes a class hierarchy: a design review, not an edit.
+    # One-operation constructors are already notes through the trivial-body cap.
     return SemanticCapAssessment(
-        RecommendationCap.MAX_MAINTENANCE_NOTE,
-        ("Semantic role cap: small constructor duplication is usually object setup surface.",),
+        RecommendationCap.MAX_REVIEW_CANDIDATE,
+        (
+            "Semantic role cap: constructors should share setup helpers rather than be "
+            "consolidated directly.",
+        ),
+        primary_action=ActionKind.EXTRACT_SMALL_HELPER,
     )
 
 
@@ -447,7 +431,7 @@ def _clean_test_helper_edit_candidate(
         metrics.test_duplicate_pair_count == 1
         and metrics.structural_duplicate_pair_count == 1
         and metrics.same_role_relation_count > 0
-        and metrics.max_relation_risk_score <= 0.0
+        and metrics.lead_risk_score <= 0.0
         and has_relation_kind(metrics, frozenset({RelationKind.BODY_IDENTICAL}))
     )
 

@@ -8,6 +8,7 @@ from typing import Any, Protocol, TypeVar
 from codeseam.adapters.languages.capabilities import AdapterCapabilities
 from codeseam.adapters.languages.manifests import ManifestMatcher
 from codeseam.analysis import AdapterId, FunctionIR, FunctionRecord, PolicyConstant, SignatureRecord
+from codeseam.platform import verified_bytes
 
 T = TypeVar("T")
 
@@ -47,6 +48,17 @@ class LanguageAnalysisContext:
     run_cache: LanguageRunCacheProtocol | None = None
 
 
+def read_source(context: LanguageAnalysisContext) -> bytes:
+    """The bytes the scan hashed; raises `SourceChangedError` if the file changed.
+
+    With a run cache, every reader in the run shares one snapshot.
+    """
+
+    if context.run_cache is not None:
+        return context.run_cache.source_bytes(context)
+    return verified_bytes(context.path, context.content_hash)
+
+
 class LanguageAdapter(Protocol):
     adapter_id: AdapterId
     languages: frozenset[str]
@@ -74,6 +86,7 @@ class LanguageAdapterAnalysis:
     functions: tuple[FunctionRecord, ...]
     signatures: tuple[SignatureRecord, ...]
     policy_constants: tuple[PolicyConstant, ...] = ()
+    diagnostics: tuple[str, ...] = ()
 
 
 __all__ = [

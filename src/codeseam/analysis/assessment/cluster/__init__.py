@@ -9,6 +9,7 @@ from codeseam.analysis.assessment.cluster.models import (
     ClusterSummary,
     LineRange,
     PolicyConstantCluster,
+    PolicyConstantMatch,
     StructuralSubcluster,
     SubclusterScores,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "Clusters",
     "LineRange",
     "PolicyConstantCluster",
+    "PolicyConstantMatch",
     "StructuralSubcluster",
     "SubclusterScores",
 ]

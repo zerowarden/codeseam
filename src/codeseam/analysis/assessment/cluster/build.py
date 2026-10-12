@@ -8,6 +8,12 @@ from itertools import combinations
 from codeseam.analysis.assessment.cluster.models import Cluster, ClusterMember
 from codeseam.analysis.assessment.definitions import ExtractionConfidence
 from codeseam.analysis.relations import EvidenceKind, RelationKind
+from codeseam.analysis.relations.content import (
+    ContentEdge,
+    MemberKey,
+    content_components,
+    member_key,
+)
 from codeseam.analysis.relations.enrichment import (
     RelationFeatureHydrator,
     RelationPairBuilder,
@@ -17,7 +23,6 @@ from codeseam.analysis.relations.normalization import (
     has_argument_normalization_transform,
     shared_operation_candidate,
 )
-from codeseam.analysis.relations.pairs import TreeEditBudget
 from codeseam.analysis.signatures import (
     AdapterId,
     LanguageFamily,
@@ -31,6 +36,8 @@ from codeseam.caveat_msg import (
     ANALOGOUS_SIGNATURE_CAVEATS,
     BROAD_TEST_SIGNATURE_CAVEATS,
     BROAD_UNKNOWN_SIGNATURE_CAVEATS,
+    CONTENT_SIMILARITY_CAVEATS,
+    PARSE_ERROR_CAVEAT,
     SIGNATURE_CAVEATS,
 )
 from codeseam.platform import cached_identifier_tokens, sha256_text
@@ -51,7 +58,6 @@ def build_clusters(
     split_test: bool = True,
     feature_hydrator: RelationFeatureHydrator | None = None,
 ) -> tuple[Cluster, ...]:
-    tree_edit_budget = TreeEditBudget()
     analyses = [
         signature
         if isinstance(signature, SignatureAnalysis)
@@ -71,7 +77,6 @@ def build_clusters(
                 shape_hash=shape_hash,
                 members=members,
                 relation_pair_builder=relation_pair_builder,
-                tree_edit_budget=tree_edit_budget,
                 split_test=split_test,
                 feature_hydrator=feature_hydrator,
             )
@@ -80,16 +85,70 @@ def build_clusters(
         analyses,
         start_index=len(same_language) + 1,
         relation_pair_builder=relation_pair_builder,
-        tree_edit_budget=tree_edit_budget,
+        feature_hydrator=feature_hydrator,
+    )
+    content = _content_clusters(
+        analyses,
+        start_index=len(same_language) + len(adapter_wrappers) + 1,
+        seen=_emitted_pair_keys([*same_language, *adapter_wrappers]),
+        split_test=split_test,
+        relation_pair_builder=relation_pair_builder,
         feature_hydrator=feature_hydrator,
     )
     analogous = _analogous_clusters(
         analyses,
-        start_index=len(same_language) + len(adapter_wrappers) + 1,
+        start_index=len(same_language) + len(adapter_wrappers) + len(content) + 1,
         relation_pair_builder=relation_pair_builder,
-        tree_edit_budget=tree_edit_budget,
     )
-    return tuple([*same_language, *adapter_wrappers, *analogous])
+    return tuple([*same_language, *adapter_wrappers, *content, *analogous])
+
+
+def _content_clusters(  # noqa: PLR0913
+    analyses: list[SignatureAnalysis],
+    *,
+    start_index: int,
+    seen: set[frozenset[MemberKey]],
+    split_test: bool,
+    relation_pair_builder: RelationPairBuilder | None,
+    feature_hydrator: RelationFeatureHydrator | None,
+) -> list[Cluster]:
+    """Clusters for similar content the signature-shape stage never compared."""
+
+    clusters: list[Cluster] = []
+    for edges in content_components(analyses, seen=seen, split_test=split_test):
+        members = sorted(
+            {member_key(member): member for edge in edges for member in edge}.values(),
+            key=_signature_location_key,
+        )
+        cluster = _cluster(
+            start_index + len(clusters),
+            members[0].core.language,
+            "",
+            members,
+            base_evidence_kind=EvidenceKind.CONTENT_SIMILARITY,
+            candidate_scope="content_similarity_component",
+            extra_candidate_methods=["exact_body_hash_index", "rare_shingle_index"],
+            relation_pair_builder=relation_pair_builder,
+            feature_hydrator=feature_hydrator,
+            candidate_pairs=edges,
+        )
+        if cluster.enrichment and cluster.enrichment.structural_relation_pairs:
+            clusters.append(cluster)
+    return clusters
+
+
+def _emitted_pair_keys(clusters: Sequence[Cluster]) -> set[frozenset[MemberKey]]:
+    return {
+        frozenset(
+            (
+                (pair.left.file, pair.left.start_line, pair.left.symbol),
+                (pair.right.file, pair.right.start_line, pair.right.symbol),
+            )
+        )
+        for cluster in clusters
+        if cluster.enrichment
+        for pair in cluster.enrichment.structural_relation_pairs
+    }
 
 
 def _same_language_groups(
@@ -109,7 +168,6 @@ def _same_language_clusters(  # noqa: PLR0913
     shape_hash: str,
     members: list[SignatureAnalysis],
     relation_pair_builder: RelationPairBuilder | None,
-    tree_edit_budget: TreeEditBudget,
     split_test: bool,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
@@ -120,7 +178,6 @@ def _same_language_clusters(  # noqa: PLR0913
             shape_hash=shape_hash,
             members=members,
             relation_pair_builder=relation_pair_builder,
-            tree_edit_budget=tree_edit_budget,
             feature_hydrator=feature_hydrator,
         )
     return _same_language_clusters_unsplit(
@@ -129,7 +186,6 @@ def _same_language_clusters(  # noqa: PLR0913
         shape_hash=shape_hash,
         members=members,
         relation_pair_builder=relation_pair_builder,
-        tree_edit_budget=tree_edit_budget,
         split_test=split_test,
         feature_hydrator=feature_hydrator,
     )
@@ -142,7 +198,6 @@ def _same_language_clusters_unsplit(  # noqa: PLR0913
     shape_hash: str,
     members: list[SignatureAnalysis],
     relation_pair_builder: RelationPairBuilder | None,
-    tree_edit_budget: TreeEditBudget,
     split_test: bool,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
@@ -153,7 +208,6 @@ def _same_language_clusters_unsplit(  # noqa: PLR0913
                 language=language,
                 members=members,
                 relation_pair_builder=relation_pair_builder,
-                tree_edit_budget=tree_edit_budget,
                 feature_hydrator=feature_hydrator,
             )
         return [
@@ -163,7 +217,6 @@ def _same_language_clusters_unsplit(  # noqa: PLR0913
                 shape_hash,
                 members,
                 relation_pair_builder=relation_pair_builder,
-                tree_edit_budget=tree_edit_budget,
                 feature_hydrator=feature_hydrator,
             )
         ]
@@ -172,7 +225,6 @@ def _same_language_clusters_unsplit(  # noqa: PLR0913
         language=language,
         members=members,
         relation_pair_builder=relation_pair_builder,
-        tree_edit_budget=tree_edit_budget,
         feature_hydrator=feature_hydrator,
     )
 
@@ -190,7 +242,6 @@ def _test_role_split_clusters(  # noqa: PLR0913
     shape_hash: str,
     members: list[SignatureAnalysis],
     relation_pair_builder: RelationPairBuilder | None,
-    tree_edit_budget: TreeEditBudget,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     buckets: dict[str, list[SignatureAnalysis]] = defaultdict(list)
@@ -207,7 +258,6 @@ def _test_role_split_clusters(  # noqa: PLR0913
                 shape_hash=sha256_text("|".join((shape_hash, "split_test", role))),
                 members=sorted(group, key=_signature_location_key),
                 relation_pair_builder=relation_pair_builder,
-                tree_edit_budget=tree_edit_budget,
                 split_test=True,
                 feature_hydrator=feature_hydrator,
             )
@@ -255,7 +305,6 @@ def _broad_test_clusters(  # noqa: PLR0913
     language: str,
     members: list[SignatureAnalysis],
     relation_pair_builder: RelationPairBuilder | None,
-    tree_edit_budget: TreeEditBudget,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     duplicate_groups, remaining = _exact_body_duplicate_groups(members)
@@ -272,7 +321,6 @@ def _broad_test_clusters(  # noqa: PLR0913
                 candidate_scope="exact_body_hash_before_broad_test_degradation",
                 extra_candidate_methods=["exact_body_hash_preserved"],
                 relation_pair_builder=relation_pair_builder,
-                tree_edit_budget=tree_edit_budget,
                 feature_hydrator=feature_hydrator,
             )
         )
@@ -296,7 +344,6 @@ def _broad_unknown_clusters(  # noqa: PLR0913
     language: str,
     members: list[SignatureAnalysis],
     relation_pair_builder: RelationPairBuilder | None,
-    tree_edit_budget: TreeEditBudget,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     duplicate_groups, remaining = _exact_body_duplicate_groups(members)
@@ -313,7 +360,6 @@ def _broad_unknown_clusters(  # noqa: PLR0913
                 candidate_scope="exact_body_hash_before_broad_unknown_degradation",
                 extra_candidate_methods=["exact_body_hash_preserved"],
                 relation_pair_builder=relation_pair_builder,
-                tree_edit_budget=tree_edit_budget,
                 feature_hydrator=feature_hydrator,
             )
         )
@@ -367,12 +413,12 @@ def _cluster(  # noqa: PLR0913
     *,
     scope: str = "same_language",
     enrich: bool = True,
-    base_evidence_kind: str = EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
+    base_evidence_kind: EvidenceKind = EvidenceKind.SIGNATURE_SHAPE_CLUSTER,
     candidate_scope: str = "within_signature_shape_bucket",
     extra_candidate_methods: list[str] | None = None,
     relation_pair_builder: RelationPairBuilder | None = None,
-    tree_edit_budget: TreeEditBudget | None = None,
     feature_hydrator: RelationFeatureHydrator | None = None,
+    candidate_pairs: Sequence[ContentEdge] | None = None,
 ) -> Cluster:
     enrichment = (
         enrich_signature_cluster(
@@ -381,8 +427,8 @@ def _cluster(  # noqa: PLR0913
             candidate_scope=candidate_scope,
             extra_candidate_methods=extra_candidate_methods or [],
             relation_pair_builder=relation_pair_builder,
-            tree_edit_budget=tree_edit_budget,
             feature_hydrator=feature_hydrator,
+            candidate_pairs=candidate_pairs,
         )
         if enrich
         else None
@@ -396,7 +442,7 @@ def _cluster(  # noqa: PLR0913
         canonical_shape=canonical_shape,
         members=tuple(_cluster_member(member, scope) for member in members),
         overlaps={"review_targets": ()},
-        review_relevance=_review_relevance(scope),
+        review_relevance=_review_relevance(scope, base_evidence_kind),
         priority_hint="info",
         non_claims=tuple(_non_claims(scope, base_evidence_kind)),
         cluster_scope=scope,
@@ -417,7 +463,6 @@ def _adapter_wrapper_clusters(
     *,
     start_index: int,
     relation_pair_builder: RelationPairBuilder | None,
-    tree_edit_budget: TreeEditBudget,
     feature_hydrator: RelationFeatureHydrator | None,
 ) -> list[Cluster]:
     clusters: list[Cluster] = []
@@ -431,7 +476,6 @@ def _adapter_wrapper_clusters(
             candidate_scope="cross_signature_argument_normalization_bucket",
             extra_candidate_methods=["argument_normalization_wrapper_bucket"],
             relation_pair_builder=relation_pair_builder,
-            tree_edit_budget=tree_edit_budget,
             feature_hydrator=feature_hydrator,
         )
         if _has_argument_normalization_pair(cluster):
@@ -564,21 +608,29 @@ def _has_argument_normalization_pair(cluster: Cluster) -> bool:
     return any(pair.relation_kind == RelationKind.ARGUMENT_NORMALIZATION_WRAPPER for pair in pairs)
 
 
+CROSS_SHAPE_EVIDENCE = frozenset(
+    {EvidenceKind.ARGUMENT_NORMALIZATION_WRAPPER, EvidenceKind.CONTENT_SIMILARITY}
+)
+
+
 def _cluster_shape_and_hash(
     shape_hash: str,
     members: list[SignatureAnalysis],
-    base_evidence_kind: str,
+    base_evidence_kind: EvidenceKind,
 ) -> tuple[str, str]:
-    if base_evidence_kind != EvidenceKind.ARGUMENT_NORMALIZATION_WRAPPER:
+    if base_evidence_kind not in CROSS_SHAPE_EVIDENCE:
         return members[0].core.canonical_shape, shape_hash
     shapes = sorted({member.core.canonical_shape for member in members})
-    canonical = "argument_normalization_wrapper(" + " <-> ".join(shapes) + ")"
-    return canonical, sha256_text(canonical)
+    member_ids = sorted("|".join(map(str, member_key(member))) for member in members)
+    canonical = f"{base_evidence_kind.value}(" + " <-> ".join(shapes) + ")"
+    return canonical, sha256_text("\n".join([canonical, *member_ids]))
 
 
-def _non_claims(scope: str, base_evidence_kind: str) -> list[str]:
+def _non_claims(scope: str, base_evidence_kind: EvidenceKind) -> list[str]:
     if base_evidence_kind == EvidenceKind.ARGUMENT_NORMALIZATION_WRAPPER:
         return list(ADAPTER_WRAPPER_SIGNATURE_CAVEATS)
+    if base_evidence_kind == EvidenceKind.CONTENT_SIMILARITY:
+        return list(CONTENT_SIMILARITY_CAVEATS)
     if scope.startswith("broad_unknown_signature_"):
         return list(BROAD_UNKNOWN_SIGNATURE_CAVEATS)
     if scope.startswith("broad_test_signature_"):
@@ -593,7 +645,6 @@ def _analogous_clusters(
     *,
     start_index: int,
     relation_pair_builder: RelationPairBuilder | None,
-    tree_edit_budget: TreeEditBudget,
 ) -> list[Cluster]:
     grouped: dict[str, list[SignatureAnalysis]] = defaultdict(list)
     for signature in signatures:
@@ -612,7 +663,6 @@ def _analogous_clusters(
                 scope=_scope_for(members),
                 enrich=False,
                 relation_pair_builder=relation_pair_builder,
-                tree_edit_budget=tree_edit_budget,
             )
         )
     return clusters
@@ -651,7 +701,9 @@ def _cluster_member(member: SignatureAnalysis, scope: str) -> ClusterMember:
     )
 
 
-def _review_relevance(scope: str) -> str:
+def _review_relevance(scope: str, base_evidence_kind: EvidenceKind) -> str:
+    if base_evidence_kind == EvidenceKind.CONTENT_SIMILARITY:
+        return "content_similarity"
     if scope.startswith("broad_unknown_signature_"):
         return "weak_unknown_signature_recurrence"
     if scope.startswith("broad_test_signature_"):
@@ -676,9 +728,13 @@ def _language_scope(member: SignatureAnalysis) -> _LanguageScope:
 
 
 def _min_confidence(members: list[SignatureAnalysis]) -> ExtractionConfidence:
-    values = [ExtractionConfidence.HIGH for _ in members]
     return min(
-        values,
+        (
+            ExtractionConfidence.LOW
+            if PARSE_ERROR_CAVEAT in member.output.caveats
+            else ExtractionConfidence.HIGH
+            for member in members
+        ),
         key=lambda value: value.rank,
         default=ExtractionConfidence.UNKNOWN,
     )

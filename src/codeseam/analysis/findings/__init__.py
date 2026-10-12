@@ -6,7 +6,6 @@ from codeseam.analysis.assessment.definitions import (
     FindingActionStatus,
     FindingReviewVisibility,
     FindingTargetType,
-    FindingVisibility,
     ReviewTier,
 )
 from codeseam.analysis.findings.models import (
@@ -35,7 +34,6 @@ __all__ = [
     "FindingMetrics",
     "FindingReviewVisibility",
     "FindingTargetType",
-    "FindingVisibility",
     "RoleEvidenceCounts",
     "ReviewTier",
     "SemanticEvidenceMetrics",

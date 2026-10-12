@@ -21,6 +21,8 @@ from codeseam.semantics import (
     SemanticProviderStatus,
     StdioSemanticProvider,
     run_semantic_enrichment,
+    transport,
+    typescript_worker_script,
 )
 
 REQUEST_TIMEOUT_MS = 200
@@ -39,14 +41,16 @@ def test_stdio_worker_provider_decodes_success_response(tmp_path: Path) -> None:
 
         request = json.loads(sys.stdin.readline())
         print(json.dumps({
+            "protocol_version": request["protocol_version"],
             "request_id": request["request_id"],
             "language": request["language"],
             "mode": request["mode"],
             "status": "ready",
             "provider": {
                 "name": "fake_worker",
-                "protocol_version": "test-protocol",
                 "mode": request["mode"],
+                "compiler_available": True,
+                "compiler_version": "5.6.0",
                 "engine": "fake_engine",
                 "engine_version": "1.0.0",
             },
@@ -74,6 +78,8 @@ def test_stdio_worker_provider_decodes_success_response(tmp_path: Path) -> None:
 
     assert result.status is SemanticProviderStatus.READY
     assert result.provider.name == "fake_worker"
+    assert result.provider.compiler_available is True
+    assert result.provider.compiler_version == "5.6.0"
     assert result.items[0].signature_id == "sig_1"
     assert result.items[0].ownership_ambiguous is True
     assert result.items[0].caveats == ("status_only",)
@@ -106,6 +112,48 @@ def test_stdio_worker_provider_reports_process_failures(
     assert result.status is expected_status
     assert result.fallback == "tree_sitter_only"
     assert expected_caveat in result.caveats
+
+
+ANSWER = (
+    "import json, sys; r = json.loads(sys.stdin.readline()); "
+    "a = {'protocol_version': r['protocol_version'], 'request_id': r['request_id'], "
+    "'language': r['language'], 'status': 'ready', "
+    "'project': {'project_cache_key': r['project_cache_key']}, "
+    "'items': [{'signature_id': 'sig_1', 'resolved': True}]}; "
+)
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ("a['protocol_version'] = 'other.v9'", "protocol_version"),
+        ("a['request_id'] = 'request-2'", "request_id"),
+        ("a['language'] = 'Rust'", "language"),
+        ("a['project']['project_cache_key'] = 'sha256:other'", "project_cache_key"),
+        ("a['items'].append({'signature_id': 'sig_9'})", "items"),
+        ("a['items'].append({'signature_id': 'sig_1'})", "items"),
+    ],
+)
+def test_stdio_worker_responses_must_answer_the_request(
+    tmp_path: Path, change: str, field: str
+) -> None:
+    provider = _provider(tmp_path, f"{ANSWER}{change}; print(json.dumps(a))")
+
+    result = provider.enrich(_request(), SemanticBudget(request_timeout_ms=1_000))
+
+    assert result.status is SemanticProviderStatus.FAILED
+    assert result.items == ()
+    assert f"semantic_worker_protocol_mismatch:{field}" in result.caveats
+
+
+def test_stdio_worker_output_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transport, "MAX_RESPONSE_BYTES", 64)
+    provider = _provider(tmp_path, f"{ANSWER}a['pad'] = 'x' * 100; print(json.dumps(a))")
+
+    result = provider.enrich(_request(), SemanticBudget(request_timeout_ms=1_000))
+
+    assert result.status is SemanticProviderStatus.FAILED
+    assert "semantic_worker_response_too_large" in result.caveats
 
 
 def test_stdio_worker_provider_reports_timeout(tmp_path: Path) -> None:
@@ -175,7 +223,7 @@ def test_typescript_status_worker_maps_single_tsconfig_ownership(tmp_path: Path)
         tmp_path / "tsconfig.json",
         '{"files": ["src/index.ts"], "references": [{"path": "./pkg"}]}',
     )
-    worker = Path("tools/semantic-worker/typescript/src/main.mjs")
+    worker = typescript_worker_script()
     provider = StdioSemanticProvider((node, str(worker)))
 
     result = provider.enrich(
@@ -201,7 +249,7 @@ def test_typescript_worker_chooses_nearest_owner_and_reports_ambiguity(
         '{"include": ["src/**/*.ts"]}',
     )
     _write(tmp_path / "packages" / "app" / "src" / "index.ts", "export const value = 1;")
-    provider = StdioSemanticProvider((node, "tools/semantic-worker/typescript/src/main.mjs"))
+    provider = StdioSemanticProvider((node, str(typescript_worker_script())))
 
     result = provider.enrich(
         _request(
@@ -230,7 +278,7 @@ def test_typescript_worker_uses_referenced_project_for_ownership(tmp_path: Path)
         '{"files": ["src/index.ts"]}',
     )
     _write(tmp_path / "packages" / "pkg" / "src" / "index.ts", "export const value = 1;")
-    provider = StdioSemanticProvider((node, "tools/semantic-worker/typescript/src/main.mjs"))
+    provider = StdioSemanticProvider((node, str(typescript_worker_script())))
 
     result = provider.enrich(
         _request(
@@ -250,7 +298,7 @@ def test_typescript_worker_reports_missing_file_ownership(tmp_path: Path) -> Non
         pytest.skip("Node is not installed")
     config = _write(tmp_path / "tsconfig.json", '{"include": ["src/**/*.ts"]}')
     _write(tmp_path / "other" / "index.ts", "export const value = 1;")
-    provider = StdioSemanticProvider((node, "tools/semantic-worker/typescript/src/main.mjs"))
+    provider = StdioSemanticProvider((node, str(typescript_worker_script())))
 
     result = provider.enrich(
         _request(
@@ -273,7 +321,7 @@ def test_typescript_worker_reports_pnp_without_loading_repo_code(tmp_path: Path)
     _write(tmp_path / ".pnp.cjs", "throw new Error('must not be executed');")
     _write(tmp_path / "package.json", '{"dependencies": {"typescript": "5.1.3"}}')
     _write(tmp_path / "src" / "index.ts", "export const value = 1;")
-    provider = StdioSemanticProvider((node, "tools/semantic-worker/typescript/src/main.mjs"))
+    provider = StdioSemanticProvider((node, str(typescript_worker_script())))
 
     result = provider.enrich(
         _request(repo_root=tmp_path.as_posix(), config_path=config.as_posix()),
@@ -377,7 +425,7 @@ def test_typescript_worker_writes_standardized_debug_logs(tmp_path: Path) -> Non
         ],
     }
     completed = subprocess.run(
-        [node, "tools/semantic-worker/typescript/src/main.mjs"],
+        [node, str(typescript_worker_script())],
         input=json.dumps(payload) + "\n",
         text=True,
         capture_output=True,
@@ -445,7 +493,7 @@ def _typescript_worker_result(
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
-    provider = StdioSemanticProvider((node, "tools/semantic-worker/typescript/src/main.mjs"))
+    provider = StdioSemanticProvider((node, str(typescript_worker_script())))
     return provider.enrich(
         SemanticEnrichmentRequest(
             request_id="request-1",

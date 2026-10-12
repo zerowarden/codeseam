@@ -56,7 +56,6 @@ def ci_summary(targets: list[dict[str, object]]) -> str:
             "ci": {
                 "fail_on": "recommended_edit",
                 "fail_scope": "all_targets",
-                "baseline": None,
                 "failing_targets": recommended,
                 "exit_code": 1 if recommended else 0,
             },
@@ -106,7 +105,6 @@ def analysis_payload_for_target(tmp_path: Path, target: dict[str, object]) -> di
             functions_seen=1,
         ),
         report_artifacts=ReportArtifacts(
-            findings=[],
             analysis_targets=[target],
             observations=[],
             debug_targets=[target],
@@ -156,7 +154,6 @@ def output_options(*, color: str = "never") -> OutputOptions:
 
 def report_artifacts(*, recommended_edit_tier_count: int) -> ReportArtifacts:
     return ReportArtifacts(
-        findings=[],
         analysis_targets=[],
         observations=[],
         debug_targets=[],
@@ -164,6 +161,7 @@ def report_artifacts(*, recommended_edit_tier_count: int) -> ReportArtifacts:
         agent_summary="",
         agent_metrics={"recommended_edit_tier_count": recommended_edit_tier_count},
         meta_readme="",
+        recommended_edit_tier_count=recommended_edit_tier_count,
     )
 
 

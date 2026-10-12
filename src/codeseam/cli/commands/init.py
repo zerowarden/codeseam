@@ -8,6 +8,7 @@ from codeseam.cli.exit_codes import OK
 from codeseam.cli.models import CliOutput, cli_output
 from codeseam.config import load_config, materialize_init_config
 from codeseam.platform import CODESEAMIGNORE_RESOURCE, project_file, resource_text
+from codeseam.platform.storage import claim_storage_root
 
 
 def init_command(args: argparse.Namespace) -> CliOutput:
@@ -31,17 +32,17 @@ def init_command(args: argparse.Namespace) -> CliOutput:
 
     config = load_config(root)
     if args.create_dirs:
-        for path in (config.path("output", "root"), config.cache_path()):
+        for path in (config.output_root, config.cache_path):
             if path.exists():
                 existing.append(path)
             else:
-                path.mkdir(parents=True, exist_ok=True)
+                claim_storage_root(config.repo_root, path)
                 created.append(path)
 
     return cli_output(
         "init_result",
         root=root,
-        report_root=config.path("output", "root"),
+        report_root=config.output_root,
         created=created,
         existing=existing,
         exit_code=OK,

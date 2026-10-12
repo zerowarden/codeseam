@@ -24,7 +24,6 @@ from codeseam.analysis import (
 )
 from codeseam.output.serializers.relations import (
     action_payload,
-    context_classification_payload,
     member_ref_payload,
     relation_pair_payload,
 )
@@ -196,6 +195,15 @@ def agent_review_target_payload(
         "reasons": list(target.reasons),
         "non_claims": list(target.non_claims),
         "files": list(target.files),
+        "locations": [
+            {
+                "file": location.file,
+                "start_line": location.start_line,
+                "end_line": location.end_line,
+                "symbol": location.symbol,
+            }
+            for location in target.locations
+        ],
         "lifecycle": target.lifecycle,
     }
     _copy_optional_values(
@@ -203,8 +211,6 @@ def agent_review_target_payload(
         {
             "abstraction_kind": target.abstraction_kind,
             "evidence_kinds": list(target.evidence_kinds),
-            "finding_kind": target.finding_kind,
-            "context_tags": list(target.context_tags),
             "downgrade_reasons": list(target.downgrade_reasons),
             "refactor_value": target.refactor_value,
             "refactor_safety": target.refactor_safety,
@@ -235,10 +241,6 @@ def _semantic_guardrails(target: Finding) -> Json:
 
 
 def _add_context_payload(payload: Json, target: Finding) -> None:
-    if target.finding_kind:
-        payload["finding_kind"] = target.finding_kind
-    if target.context_tags:
-        payload["context_tags"] = list(target.context_tags)
     if target.downgrade_reasons:
         payload["downgrade_reasons"] = list(target.downgrade_reasons)
     if target.refactor_value:
@@ -247,11 +249,6 @@ def _add_context_payload(payload: Json, target: Finding) -> None:
         payload["refactor_safety"] = target.refactor_safety
     if target.summary_reason:
         payload["summary_reason"] = target.summary_reason
-    if target.context_classifications:
-        payload["context_classifications"] = [
-            context_classification_payload(classification)
-            for classification in target.context_classifications
-        ]
 
 
 def decision_payload(decision: FindingDecision) -> Json:
@@ -441,6 +438,10 @@ def _compact_relation_pair(pair: RelationPair) -> Json:
         "same_role": pair.same_role,
         "role": pair.role,
         "body_hash_match": pair.flags.body_hash_match,
+        "relatedness_score": round(pair.scores.relatedness, 4),
+        "refactorability_score": round(pair.scores.refactorability, 4),
+        "risk_score": round(pair.scores.risk, 4),
+        "confidence_score": round(pair.scores.confidence, 4),
     }
 
 
@@ -540,21 +541,12 @@ def _copy_serialized_action_selection(
 
     scored_action = _text(payload.get("action_kind"))
     recommendation_status = _text(payload.get("status"))
-    requested_action = _text(payload.get("requested_action_kind") or scored_action)
-    selected_action = primary_action.value or scored_action
-    selected_status = action_status.value or recommendation_status
-    if selected_action:
-        payload["action_kind"] = selected_action
-        payload["selected_action_kind"] = selected_action
-    if selected_status:
-        payload["status"] = selected_status
-        payload["selected_action_status"] = selected_status
-    if requested_action:
-        payload["requested_action_kind"] = requested_action
-    if scored_action:
-        payload["scored_action_kind"] = scored_action
-    if recommendation_status:
-        payload["recommendation_status"] = recommendation_status
+    _write_action_selection(
+        payload,
+        scored=(scored_action, recommendation_status),
+        requested=_text(payload.get("requested_action_kind") or scored_action),
+        selected=(primary_action.value, action_status.value),
+    )
 
 
 def _copy_action_selection(
@@ -570,24 +562,41 @@ def _copy_action_selection(
     """
 
     scored_action = action.action_kind.value
-    recommendation_status = action.status.value
-    requested_action = (
-        action.requested_action_kind.value if action.requested_action_kind else scored_action
+    requested = action.requested_action_kind
+    _write_action_selection(
+        payload,
+        scored=(scored_action, action.status.value),
+        requested=requested.value if requested else scored_action,
+        selected=(target.primary_action.value, target.action_status.value),
     )
-    selected_action = target.primary_action.value or scored_action
-    selected_status = target.action_status.value or recommendation_status
-    if selected_action:
-        payload["action_kind"] = selected_action
-        payload["selected_action_kind"] = selected_action
-    if selected_status:
-        payload["status"] = selected_status
-        payload["selected_action_status"] = selected_status
-    if requested_action:
-        payload["requested_action_kind"] = requested_action
-    if scored_action:
-        payload["scored_action_kind"] = scored_action
-    if recommendation_status:
-        payload["recommendation_status"] = recommendation_status
+
+
+def _write_action_selection(
+    payload: Json,
+    *,
+    scored: tuple[str, str],
+    requested: str,
+    selected: tuple[str, str],
+) -> None:
+    """Write the selected (final) action beside the scorer's raw one.
+
+    `scored` and `selected` are (action kind, status); a missing selection
+    falls back to the scored value.
+    """
+
+    scored_action, recommendation_status = scored
+    selected_action = selected[0] or scored_action
+    selected_status = selected[1] or recommendation_status
+    fields_by_value = {
+        ("action_kind", "selected_action_kind"): selected_action,
+        ("status", "selected_action_status"): selected_status,
+        ("requested_action_kind",): requested,
+        ("scored_action_kind",): scored_action,
+        ("recommendation_status",): recommendation_status,
+    }
+    for keys, value in fields_by_value.items():
+        if value:
+            payload.update(dict.fromkeys(keys, value))
 
 
 def _text(value: object) -> str:

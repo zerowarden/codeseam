@@ -16,16 +16,25 @@ from codeseam.platform.defaults import (
     default_config,
     resource_text,
 )
-from codeseam.platform.dicts import merge_into, set_nested
-from codeseam.platform.errors import CodeseamError, ConfigError, RepositoryContextError
+from codeseam.platform.dicts import merge_into, set_nested, with_overrides
+from codeseam.platform.errors import (
+    CodeseamError,
+    ConfigError,
+    RepositoryContextError,
+    SourceChangedError,
+)
 from codeseam.platform.files import (
+    FileSelection,
     GlobMatcher,
+    content_ids,
     is_binary,
     line_count,
     matches_any,
     matches_glob,
+    qualified_symbol,
     sha256_bytes,
     sha256_text,
+    verified_bytes,
 )
 from codeseam.platform.iterables import dedupe
 from codeseam.platform.json import (
@@ -35,6 +44,7 @@ from codeseam.platform.json import (
     as_json_objects,
     dumps_jsonable_fast,
     dumps_jsonable_stable,
+    is_count,
     json_digest,
     json_float,
     json_int,
@@ -48,14 +58,6 @@ from codeseam.platform.json import (
     write_jsonl_jsonable_atomic,
 )
 from codeseam.platform.locks import FileLock, file_locks
-from codeseam.platform.minhash import (
-    DEFAULT_LSH_BANDS,
-    DEFAULT_MINHASH_SIZE,
-    MAX_UINT64,
-    hash64_band,
-    lsh_band_keys,
-    minhash_signature,
-)
 from codeseam.platform.paths import (
     AGENT_SUMMARY,
     ARTIFACT_REFS,
@@ -97,17 +99,20 @@ from codeseam.platform.strings import (
 )
 
 __all__ = [
+    "is_count",
+    "SourceChangedError",
+    "verified_bytes",
+    "content_ids",
+    "qualified_symbol",
+    "FileSelection",
     "AGENT_SUMMARY",
     "ARTIFACT_REFS",
     "ARTIFACT_RELPATHS",
     "ARTIFACTS",
     "DEFAULT_CACHE_ROOT",
     "DEFAULT_CONFIG_RESOURCE",
-    "DEFAULT_LSH_BANDS",
-    "DEFAULT_MINHASH_SIZE",
     "DEFAULT_OUTPUT_ROOT",
     "INIT_CONFIG_RESOURCE",
-    "MAX_UINT64",
     "PROJECT_CONFIG",
     "PROJECT_DIR",
     "PROJECT_IGNORE",
@@ -138,7 +143,6 @@ __all__ = [
     "dumps_jsonable_fast",
     "dumps_jsonable_stable",
     "file_locks",
-    "hash64_band",
     "identifier_tokens",
     "increment_stat",
     "inverse_ramp",
@@ -156,12 +160,10 @@ __all__ = [
     "line_count",
     "load_jsonl_objects",
     "loads_json",
-    "lsh_band_keys",
     "matches_any",
     "matches_glob",
     "mean_jaccard_by_key",
     "merge_into",
-    "minhash_signature",
     "noisy_or",
     "normalize_identifier",
     "ordered_counts",
@@ -177,6 +179,7 @@ __all__ = [
     "runtime_lock_dir",
     "runtime_lock_paths",
     "set_nested",
+    "with_overrides",
     "sha256_bytes",
     "sha256_text",
     "similarity_ratio",

@@ -22,7 +22,9 @@ class EvidenceKind(StrEnum):
     CALLSITE_PIPELINE = "callsite_pipeline"
     CALLSITE_REGISTERED = "callsite_registered"
     CALLSITE_STORED_REUSE = "callsite_stored_reuse"
+    CONTENT_SIMILARITY = "content_similarity"
     INTRA_FUNCTION_DUPLICATE = "intra_function_duplicate"
+    SHARED_BLOCK = "shared_block"
     POLICY_CONSTANT_DUPLICATE = "policy_constant_duplicate"
     SIGNATURE_SHAPE_CLUSTER = "signature_shape_cluster"
     STRUCTURAL_DUPLICATE = "structural_duplicate"
@@ -60,6 +62,7 @@ class RelationKind(StrEnum):
     SAME_CORE_DIFFERENT_WRAPPER = "same_core_different_wrapper"
     SAME_ARGUMENT_FLOW_DIFFERENT_CONTROL = "same_argument_flow_different_control"
     SAME_CALL_SET_DIFFERENT_ORDER = "same_call_set_different_order"
+    SAME_STATEMENTS_DIFFERENT_ORDER = "same_statements_different_order"
 
 
 CLEAN_CLONE_RELATIONS = frozenset((RelationKind.BODY_IDENTICAL, RelationKind.BODY_PARAMETERIZED))
@@ -84,12 +87,12 @@ class DeltaKind(StrEnum):
     EXTRA_TERMINAL_CALL = "EXTRA_TERMINAL_CALL_DELTA"
     LITERAL_VALUE = "LITERAL_VALUE_DELTA"
     LOOP = "LOOP_DELTA"
+    OPERATOR = "OPERATOR_DELTA"
     RECEIVER_SHAPE = "RECEIVER_SHAPE_DELTA"
     RETURN_VALUE = "RETURN_VALUE_DELTA"
 
 
 class CloneClass(StrEnum):
-    TYPE_1_EXACT = "type_1_exact"
     TYPE_2_PARAMETERIZED = "type_2_parameterized"
     TYPE_3_NEAR_MISS = "type_3_near_miss"
     CONTRACT_ANALOGY = "contract_analogy"

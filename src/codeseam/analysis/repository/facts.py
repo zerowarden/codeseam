@@ -68,7 +68,7 @@ def build_repository_facts(scan: RepositoryScan) -> RepositoryFacts:
 
 
 def repository_facts_cache_value(facts: RepositoryFacts) -> RepositoryFactsCacheValue:
-    """Return the compact pickle-blob value for repository facts."""
+    """Return the compact cache-blob value for repository facts."""
 
     return (
         REPOSITORY_FACTS_CACHE_VALUE_VERSION,

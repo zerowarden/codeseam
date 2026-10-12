@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from codeseam.adapters.repository.root import detect_repo_root
 from codeseam.cli.exit_codes import OK, REPOSITORY_CONTEXT_ERROR
 from codeseam.cli.explain import ExplainRenderOptions, explain_source_lines, load_explain
 from codeseam.cli.models import CliOutput, cli_output
@@ -9,7 +10,7 @@ from codeseam.config import load_config
 
 
 def explain_command(args: argparse.Namespace) -> CliOutput:
-    config = load_config()
+    config = load_config(detect_repo_root())
     item = load_explain(config, args.target_id)
     if item is None:
         return cli_output(

@@ -6,12 +6,14 @@ from codeseam.adapters.languages.base import (
     LanguageAdapterAnalysis,
     LanguageAnalysisContext,
     StaticLanguageSupport,
+    read_source,
 )
 from codeseam.adapters.languages.capabilities import AdapterCapabilities
 from codeseam.adapters.languages.python.analysis import (
     PythonAnalysis,
     PythonFunctionNode,
-    parse_python,
+    decode_python_source,
+    parse_python_source,
 )
 from codeseam.adapters.languages.python.manifests import PYTHON_MANIFEST_MATCHERS
 from codeseam.adapters.languages.python.signatures import (
@@ -33,7 +35,6 @@ class PythonAstAdapter(StaticLanguageSupport):
         syntax_frontend="python_ast",
         policy_constants=True,
         relation_detail=True,
-        compiler_semantics=True,
     )
 
     def extract_analysis(self, context: LanguageAnalysisContext) -> LanguageAdapterAnalysis:
@@ -64,10 +65,12 @@ class PythonAstAdapter(StaticLanguageSupport):
         )
 
 
-def _python_analysis(context: LanguageAnalysisContext) -> PythonAnalysis | None:
+def _python_analysis(context: LanguageAnalysisContext) -> PythonAnalysis:
     if context.run_cache is not None:
-        return context.run_cache.analysis(context, "python_ast", lambda: parse_python(context.path))
-    return None
+        return context.run_cache.analysis(
+            context, "python_ast", lambda: parse_python_source(read_source(context))
+        )
+    return parse_python_source(read_source(context))
 
 
 def _cached_python_analysis(context: LanguageAnalysisContext) -> PythonAnalysis | None:
@@ -96,12 +99,8 @@ def _python_function_source(
     if function is None:
         return ""
     try:
-        source = (
-            context.run_cache.source_bytes(context).decode("utf-8", errors="replace")
-            if context.run_cache is not None
-            else context.path.read_text(encoding="utf-8", errors="replace")
-        )
-    except OSError:
+        source = decode_python_source(read_source(context))
+    except (OSError, SyntaxError, UnicodeDecodeError):
         return ""
     lines = source.splitlines()
     return "\n".join(lines[function.start_line - 1 : function.end_line])

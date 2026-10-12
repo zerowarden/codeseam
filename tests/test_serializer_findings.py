@@ -25,6 +25,7 @@ from codeseam.analysis import (
     SemanticRisk,
 )
 from codeseam.output.serializers.findings import agent_review_target_payload, metrics_payload
+from codeseam.platform import as_json_objects
 
 
 def test_agent_review_target_payload_is_lean_and_explains_failed_gates() -> None:
@@ -32,7 +33,7 @@ def test_agent_review_target_payload_is_lean_and_explains_failed_gates() -> None
         _finding(
             target_id="rt_000001",
             title="Duplicate helpers",
-            evidence_classes=("body_tree_similarity",),
+            evidence_classes=("body_structure_similarity",),
             reasons=("common code skeleton",),
             non_claims=("not semantic equivalence",),
             files=("src/a.py",),
@@ -48,7 +49,10 @@ def test_agent_review_target_payload_is_lean_and_explains_failed_gates() -> None
     action = cast(dict[str, object], assessment["action_recommendation"])
 
     assert "metrics" not in payload
-    assert "locations" not in payload
+    assert all(
+        set(item) == {"file", "start_line", "end_line", "symbol"}
+        for item in as_json_objects(payload["locations"])
+    )
     assert assessment["detection_confidence"] == {"evidence_quality": "structural"}
     assert action["action_kind"] == "record_shared_concern"
     assert action["status"] == "record_shared_concern"

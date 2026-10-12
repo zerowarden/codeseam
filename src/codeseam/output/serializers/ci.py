@@ -1,14 +1,10 @@
 from __future__ import annotations
 
+import os
+
 from codeseam.analysis import ReviewTier
 from codeseam.platform import Json, as_json_object, json_int
 from codeseam.version import package_version
-
-CI_ARTIFACT_PATHS = (
-    ".codeseam/reports/ci/codeseam-report.json",
-    ".codeseam/reports/ci/codeseam-report.sarif",
-    ".codeseam/reports/ci/codeseam-summary.md",
-)
 
 
 def ci_payload(result: Json, *, include_timings: bool = False) -> Json:
@@ -25,37 +21,18 @@ def ci_payload(result: Json, *, include_timings: bool = False) -> Json:
             "enabled": True,
             "fail_on": "recommended_edit",
             "fail_scope": "all_targets",
-            "baseline": None,
             "failing_targets": failing_targets,
             "exit_code": 1 if failing_targets else 0,
         },
-        "artifacts": list(CI_ARTIFACT_PATHS),
+        "artifacts": [
+            os.path.relpath(str(path))
+            for key in ("analysis_path", "agent_summary_path", "human_summary_path")
+            if (path := as_json_object(result.get("reports")).get(key))
+        ],
     }
     if include_timings:
         payload["timings"] = as_json_object(result.get("timings"))
     return payload
 
 
-def ci_sarif_payload(payload: Json) -> Json:
-    return {
-        "version": "2.1.0",
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "runs": [
-            {
-                "tool": {
-                    "driver": {
-                        "name": "codeseam",
-                        "version": payload.get("codeseam_version", ""),
-                        "rules": [],
-                    }
-                },
-                "results": [],
-                "properties": {
-                    "failing_targets": as_json_object(payload.get("ci")).get("failing_targets", 0),
-                },
-            }
-        ],
-    }
-
-
-__all__ = ["CI_ARTIFACT_PATHS", "ci_payload", "ci_sarif_payload"]
+__all__ = ["ci_payload"]

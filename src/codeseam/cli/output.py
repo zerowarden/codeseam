@@ -17,8 +17,7 @@ from codeseam.cli.constants import REVIEW_TIER_LABELS
 from codeseam.cli.explain import ExplainRenderOptions, render_explain
 from codeseam.cli.models import CliOutput, OutputOptions
 from codeseam.cli.repository_summary import repository_summary
-from codeseam.output.serializers.ci import ci_payload, ci_sarif_payload
-from codeseam.output.serializers.finding_buckets import is_agent_summary_target
+from codeseam.output.serializers.ci import ci_payload
 from codeseam.output.serializers.titles import (
     display_action_title,
     display_reason_label,
@@ -89,10 +88,6 @@ def _render_help(parser: Any, stderr: object = False) -> None:
     _write_plain(str(parser.format_help()), stderr=bool(stderr))
 
 
-def _render_parser_error(parser: Any, message: object) -> None:
-    _write_plain(f"{parser.format_help()}\nerror: {message}\n", stderr=True)
-
-
 def _render_error_output(message: object, prefix: object = "error") -> None:
     _render_error(str(message), prefix=str(prefix))
 
@@ -132,10 +127,12 @@ def _render_explain_result(
 
 
 def console_for(options: OutputOptions) -> Console:
+    if options.color == "never":
+        # No styling at all: `no_color` alone still emits bold/dim when FORCE_COLOR is set.
+        return Console(color_system=None, no_color=True)
     return Console(
         force_terminal=True if options.color == "always" else None,
         color_system="256" if options.color == "always" else "auto",
-        no_color=options.color == "never",
     )
 
 
@@ -146,8 +143,6 @@ def render_analyze_result(result: Json, options: OutputOptions) -> None:
                 _write_text(render_ci_json(result, options), options.output)
             case "ndjson":
                 _write_text(render_ci_ndjson(result, options), options.output)
-            case "sarif":
-                _write_text(render_sarif(result, options), options.output)
             case _:
                 render_ci_analyze_result(result, options)
         return
@@ -156,8 +151,6 @@ def render_analyze_result(result: Json, options: OutputOptions) -> None:
             _write_text(render_json(result, options), options.output)
         case "ndjson":
             _write_text(render_ndjson(result, options), options.output)
-        case "sarif":
-            _write_text(render_sarif(result, options), options.output)
         case _:
             render_default_analyze_result(result, options)
 
@@ -323,32 +316,22 @@ def _render_init_result(
     _write_plain("\n".join(lines) + "\n")
 
 
-def _render_validation_result(issues: list[Any]) -> None:
-    if issues:
-        for issue in issues:
-            _write_plain(f"{issue.artifact}: {issue.message}\n", stderr=True)
-        return
-    _write_plain("schema validation passed\n")
-
-
 _OUTPUT_RENDERERS: dict[str, Callable[[CliOutput], None]] = {
     "none": DataRenderer(_render_none, ()),
     "help": DataRenderer(_render_help, ("parser", "stderr"), {"stderr": False}),
-    "parser_error": DataRenderer(_render_parser_error, ("parser", "message")),
     "error": DataRenderer(_render_error_output, ("message", "prefix"), {"prefix": "error"}),
     "cancelled": DataRenderer(_render_cancelled, ()),
-    "profile_result": ProfileRenderer(),
-    "analyze_result": DataRenderer(render_analyze_result, ("result", "options")),
-    "default_exclusions": DataRenderer(render_default_exclusions, ("patterns", "options")),
-    "file_explanation": DataRenderer(render_file_explanation, ("explanation", "options")),
     "json_payload": DataRenderer(_render_json_output, ("payload", "pretty"), {"pretty": True}),
     "init_result": DataRenderer(
         _render_init_output,
         ("root", "report_root", "created", "existing"),
     ),
-    "explain_result": DataRenderer(_render_explain_result, ("item", "options", "source_lines")),
     "explain_not_found": DataRenderer(_render_explain_not_found, ("target_id",)),
-    "validation_result": DataRenderer(_render_validation_result, ("issues",)),
+    "explain_result": DataRenderer(_render_explain_result, ("item", "options", "source_lines")),
+    "analyze_result": DataRenderer(render_analyze_result, ("result", "options")),
+    "default_exclusions": DataRenderer(render_default_exclusions, ("patterns", "options")),
+    "file_explanation": DataRenderer(render_file_explanation, ("explanation", "options")),
+    "profile_result": ProfileRenderer(),
 }
 
 
@@ -403,11 +386,6 @@ def _json_document(payload: Json) -> str:
 
 def _ndjson(records: list[Json]) -> str:
     return "".join(dumps_jsonable_stable(record) + "\n" for record in records)
-
-
-def render_sarif(result: Json, options: OutputOptions) -> str:
-    payload = ci_payload(result, include_timings=options.timings)
-    return _json_document(ci_sarif_payload(payload))
 
 
 def render_default_analyze_result(result: Json, options: OutputOptions) -> None:
@@ -570,7 +548,7 @@ def _assessment_band(target: Json, key: str) -> str:
 
 def _local_review_targets(targets: object) -> list[Json]:
     surfaced_targets = [
-        target for target in as_json_objects(targets) if is_agent_summary_target(target)
+        target for target in as_json_objects(targets) if target.get("summary_eligible") is True
     ]
     return sorted(surfaced_targets, key=_local_target_key)
 
@@ -599,10 +577,11 @@ def _local_review_tier(target: Json) -> ReviewTier:
 
 def _analysis_summary_line(summary: Json, timings: Json) -> str:
     counts = repository_summary(summary)
+    failed = f", {counts.files_failed} with errors" if counts.files_failed else ""
     return (
         "Analyzed "
         f"{counts.files_analysed} files "
-        f"({counts.files_skipped} skipped) in "
+        f"({counts.files_skipped} skipped{failed}) in "
         f"{_duration_label(timings['elapsed_seconds'])}."
     )
 

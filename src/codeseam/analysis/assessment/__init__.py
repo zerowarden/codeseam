@@ -15,7 +15,6 @@ from codeseam.analysis.assessment.models import (
     AbstractionRisk,
     ActionAssessment,
     AssessmentBreakdown,
-    ContextClassification,
     DetectionConfidence,
     EvidenceSummary,
     MaintenancePayoff,
@@ -23,7 +22,7 @@ from codeseam.analysis.assessment.models import (
     SemanticRisk,
 )
 from codeseam.analysis.assessment.policy import (
-    DEFAULT_ASSESSMENT_VALUES,
+    ASSESSMENT_SECTION,
     AssessmentPolicy,
     ConfigSection,
     DetectionPolicy,
@@ -45,7 +44,7 @@ def build_findings(*args: Any, **kwargs: Any) -> Any:
 
 
 __all__ = [
-    "DEFAULT_ASSESSMENT_VALUES",
+    "ASSESSMENT_SECTION",
     "AbstractionFit",
     "AbstractionRisk",
     "ActionAssessment",
@@ -55,7 +54,6 @@ __all__ = [
     "AssessmentPolicy",
     "build_findings",
     "ConfigSection",
-    "ContextClassification",
     "DetectionConfidence",
     "DetectionPolicy",
     "EvidenceSummary",

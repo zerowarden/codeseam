@@ -38,6 +38,7 @@ DELTA_VARIATION_POINTS = {
     DeltaKind.EXTRA_TERMINAL_CALL: "terminal_call",
     DeltaKind.LITERAL_VALUE: "literal_value",
     DeltaKind.LOOP: "loop",
+    DeltaKind.OPERATOR: "operator",
     DeltaKind.RECEIVER_SHAPE: "receiver_shape",
     DeltaKind.RETURN_VALUE: "return_value",
 }

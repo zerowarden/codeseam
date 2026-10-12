@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Sized
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Protocol, cast
 
 from codeseam.analysis.assessment.definitions import ExtractionConfidence
-from codeseam.analysis.assessment.models import AbstractionRisk, ContextClassification
+from codeseam.analysis.assessment.models import AbstractionRisk
 from codeseam.analysis.relations.models import (
     ActionKind,
     CloneClass,
@@ -105,7 +106,6 @@ class ClusterEnrichment:
     refactor_action_summary: RefactorActionSummary
     abstraction_kind: str
     abstraction_risks: tuple[AbstractionRisk, ...]
-    context_classifications: tuple[ContextClassification, ...] = ()
 
 
 class _HasMembers(Protocol):
@@ -148,8 +148,15 @@ class Cluster(_MemberCounted):
     schema_version: str = "codeseam.signature_cluster.v1"
 
 
+class PolicyConstantMatch(StrEnum):
+    IDENTICAL = "identical"  # same name, same literal
+    DRIFTED = "drifted"  # same name, overlapping but different literals
+    SCATTERED = "scattered"  # same literal under different names
+
+
 @dataclass(frozen=True)
 class PolicyConstantCluster(_MemberCounted):
+    match: PolicyConstantMatch
     cluster_id: str
     language: str
     shape_hash: str
@@ -211,6 +218,7 @@ __all__ = [
     "Clusters",
     "LineRange",
     "PolicyConstantCluster",
+    "PolicyConstantMatch",
     "StructuralSubcluster",
     "SubclusterScores",
 ]

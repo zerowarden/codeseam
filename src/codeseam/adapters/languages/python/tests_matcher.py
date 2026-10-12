@@ -8,6 +8,7 @@ from pathlib import Path
 from codeseam.platform import GlobMatcher
 
 DEFAULT_PYTHON_TEST_FILE_PATTERNS = (
+    "test_*.py",
     "*_test.py",
     "*_tests.py",
     "tests.py",
@@ -44,10 +45,6 @@ def python_test_path_matcher(repo_root: Path | None = None) -> PythonTestPathMat
         file_patterns=(*DEFAULT_PYTHON_TEST_FILE_PATTERNS, *config.file_patterns),
         test_paths=(*DEFAULT_PYTHON_TEST_PATHS, *config.test_paths),
     )
-
-
-def matches_python_test_path(path: Path) -> bool:
-    return PythonTestPathMatcher().matches_path(path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +112,5 @@ def _under_test_path(rel: str, test_paths: tuple[str, ...]) -> bool:
 
 __all__ = [
     "PythonTestPathMatcher",
-    "matches_python_test_path",
     "python_test_path_matcher",
 ]

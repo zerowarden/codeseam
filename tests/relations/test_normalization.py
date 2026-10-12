@@ -91,7 +91,7 @@ def test_clone_default_action_applies_high_cost_before_edit_action() -> None:
     assert (
         default_action(
             RelationKind.BODY_IDENTICAL,
-            CloneClass.TYPE_1_EXACT,
+            CloneClass.TYPE_2_PARAMETERIZED,
             RELATION_ASSESSMENT_POLICY.refactorability_high_threshold,
             RELATION_ASSESSMENT_POLICY.high_abstraction_cost_threshold,
         )
@@ -128,7 +128,7 @@ def test_clone_basis_preserves_priority_and_thresholds_weak_evidence() -> None:
         "same_signature_shape",
         "normalized_body_identity",
         "normalized_name_similarity",
-        "body_tree_similarity",
+        "body_structure_similarity",
         "parameter_use_similarity",
     )
 
@@ -179,10 +179,14 @@ def _clone_context(**overrides: object) -> CloneClassificationInput:
         CloneClassificationInput,
         SimpleNamespace(
             relation_kind=overrides.get("relation_kind", RelationKind.NONE),
-            scores=SimpleNamespace(name=overrides.get("name", 0.0)),
+            scores=SimpleNamespace(
+                name=overrides.get("name", 0.0),
+                graph=overrides.get("graph", 0.0),
+            ),
             flags=SimpleNamespace(
                 same_signature_shape=overrides.get("same_signature_shape", False),
                 body_hash_match=overrides.get("body_hash_match", False),
+                shared_control_context=overrides.get("shared_control_context", False),
             ),
             tree_similarity=overrides.get("tree_similarity", 0.0),
             tree_distance_source=overrides.get("tree_distance_source", ""),

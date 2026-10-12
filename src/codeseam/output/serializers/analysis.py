@@ -16,6 +16,7 @@ class AnalysisPayloadSummary:
     files_skipped: int
     functions_seen: int
     languages: tuple[str, ...] = ()
+    file_diagnostics: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 def analysis_result_payload(
@@ -32,6 +33,10 @@ def analysis_result_payload(
             "files_analysed": summary.files_analysed,
             "files_skipped": summary.files_skipped,
             "functions_seen": summary.functions_seen,
+            "files_failed": [
+                {"path": path, "diagnostics": list(diagnostics)}
+                for path, diagnostics in summary.file_diagnostics
+            ],
             "languages": list(summary.languages),
             "review_targets": len(targets),
         },

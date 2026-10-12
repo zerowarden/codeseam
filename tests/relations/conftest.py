@@ -12,12 +12,8 @@ from codeseam.analysis import (
     SignatureCore,
     SignatureOutputDetail,
     SignatureTypeSource,
-    candidates,
     signature_analysis_from_core,
 )
-
-FORCED_LSH_SIGNATURE = (1, 2, 3, 4)
-LSH_ALWAYS_TRIGGER = 0
 
 
 @pytest.fixture
@@ -31,6 +27,7 @@ def signature_analysis() -> Callable[..., SignatureAnalysis]:
         body_hash: str = "sha256:test",
         arg_reads: tuple[tuple[int, tuple[str, ...]], ...] = (),
         file: str = "src/example.py",
+        role: str = "source",
     ) -> SignatureAnalysis:
         core = SignatureCore(
             language="python",
@@ -42,7 +39,7 @@ def signature_analysis() -> Callable[..., SignatureAnalysis]:
             container=None,
             start_line=1,
             end_line=max(1, len(statements)),
-            role="source",
+            role=role,
             type_source=SignatureTypeSource.FALLBACK,
             parameters=("arg0",),
             return_type="object",
@@ -68,42 +65,3 @@ def signature_analysis() -> Callable[..., SignatureAnalysis]:
         )
 
     return build
-
-
-def _lsh_fixture(
-    name: str,
-    *,
-    thresholds: bool = False,
-    collision: bool = False,
-) -> Callable[[pytest.MonkeyPatch], Callable[[], None]]:
-    @pytest.fixture(name=name)
-    def fixture(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
-        return lambda: _force_lsh(monkeypatch, thresholds=thresholds, collision=collision)
-
-    return fixture
-
-
-def _force_lsh(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    thresholds: bool = False,
-    collision: bool = False,
-) -> None:
-    if thresholds:
-        monkeypatch.setattr(candidates, "LSH_CLUSTER_MEMBER_THRESHOLD", 2)
-        monkeypatch.setattr(candidates, "LSH_PAIR_CAP_TRIGGER", LSH_ALWAYS_TRIGGER)
-    if collision:
-        monkeypatch.setattr(
-            candidates,
-            "minhash_signature",
-            lambda _values, *, size: FORCED_LSH_SIGNATURE,
-        )
-        monkeypatch.setattr(
-            candidates,
-            "lsh_band_keys",
-            lambda _signature, *, bands: ((0, (1, 2)),),
-        )
-
-
-force_lsh = _lsh_fixture("force_lsh", thresholds=True)
-force_lsh_collision = _lsh_fixture("force_lsh_collision", collision=True)

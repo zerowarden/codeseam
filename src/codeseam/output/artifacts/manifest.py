@@ -9,22 +9,17 @@ from codeseam.config import Config
 from codeseam.platform import Json, OutputPaths
 
 
-def build_manifest(  # noqa: PLR0913
-    config: Config,
-    *,
-    scope: str = "full",
-    base_ref: str | None = None,
-    selected_file_count: int = 0,
-) -> Json:
+def build_manifest(config: Config, *, selected_file_count: int = 0) -> Json:
     created_at = datetime.now(UTC)
-    paths = OutputPaths(config.path("output", "root"))
+    paths = OutputPaths(config.output_root)
     return {
         "schema_version": "codeseam.manifest.v1",
         "run_id": f"{created_at.strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}",
         "created_at": created_at.isoformat(),
         "repo_root": ".",
-        "scope": scope,
-        "base_ref": base_ref,
+        # Diff scoping is not implemented; keep the v1 keys honest rather than absent.
+        "scope": "full",
+        "base_ref": None,
         "head_ref": _head_ref(config.repo_root),
         "config_hash": config.config_hash,
         "selected_file_count": selected_file_count,

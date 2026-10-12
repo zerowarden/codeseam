@@ -1,34 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from codeseam.adapters.languages import AdapterCapabilitySummary
-from codeseam.analysis import RepositoryFacts
-from codeseam.pipeline.repository_enrichment import RepositoryEnrichment
-from codeseam.platform import Json, text_list
+from codeseam.analysis import Finding, RepositoryFacts
+from codeseam.platform import Json
 
 
-def adapter_capabilities_payload(enrichment: RepositoryEnrichment) -> list[Json]:
-    return [_capability_summary_payload(summary) for summary in enrichment.adapter_capabilities]
+def adapter_capabilities_payload(summaries: Sequence[AdapterCapabilitySummary]) -> list[Json]:
+    return [_capability_summary_payload(summary) for summary in summaries]
 
 
 def target_adapter_capabilities_payload(
-    target: Json,
+    target: Finding,
     facts: RepositoryFacts,
-    enrichment: RepositoryEnrichment,
+    summaries: Sequence[AdapterCapabilitySummary],
 ) -> list[Json]:
-    languages = _target_languages(target, facts)
+    languages = {
+        facts.languages_by_path[path] for path in target.files if path in facts.languages_by_path
+    }
     return [
         _capability_summary_payload(summary)
-        for summary in enrichment.adapter_capabilities
+        for summary in summaries
         if summary.language in languages
     ]
-
-
-def _target_languages(target: Json, facts: RepositoryFacts) -> set[str]:
-    languages: set[str] = set()
-    for path in text_list(target.get("files")):
-        if path in facts.languages_by_path:
-            languages.add(facts.languages_by_path[path])
-    return languages
 
 
 def _capability_summary_payload(summary: AdapterCapabilitySummary) -> Json:

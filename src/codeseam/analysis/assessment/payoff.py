@@ -36,11 +36,11 @@ def score_maintenance_payoff(
         reasons.append("recurrent_members")
 
     volume = ramp(line_span, low=anchors.material_line_span, high=anchors.high_line_span)
-    if metrics.intra_function_duplicate_block_count:
+    if metrics.duplicate_block_count:
         volume = max(
             volume,
             ramp(
-                metrics.intra_function_duplicate_line_count,
+                metrics.duplicate_block_line_count,
                 low=anchors.local_duplicate_material_line_span,
                 high=anchors.local_duplicate_high_line_span,
             ),
@@ -75,8 +75,8 @@ def score_maintenance_payoff(
 
 
 def _relation_quality(metrics: FindingMetrics, anchors: PayoffPolicy) -> tuple[float, str]:
-    if metrics.intra_function_duplicate_block_count:
-        return 1.0, "intra_function_duplicate"
+    if metrics.duplicate_block_count:
+        return 1.0, "duplicate_block"
     if metrics.structural_duplicate_pair_count:
         return 1.0, "structural_duplicate"
     if metrics.structural_relation_pair_count:

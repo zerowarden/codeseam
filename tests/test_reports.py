@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from codeseam.analysis import (
     ActionKind,
-    FindingActionStatus,
 )
-from codeseam.output.reports.documents import build_metrics, render_agent_summary
+from codeseam.output.reports.documents import render_agent_summary
 from codeseam.platform import Json
 
 PRIMARY_ACTION_MEMBER_LINES = 2
@@ -18,13 +17,12 @@ def test_agent_summary_includes_agent_visible_review_targets() -> None:
         for index in range(1, 13)
     ]
     metrics: Json = {
-        "internal_finding_count": 0,
         "analysis_target_count": len(targets),
         "observation_count": 0,
         "recommended_edit_count": len(targets),
     }
 
-    markdown = render_agent_summary(_report_for(targets), {"targets": targets}, metrics)
+    markdown = render_agent_summary(_report_for(targets), targets, metrics)
 
     assert "`rt_000012`" in markdown
     assert "Do not read full JSONL sidecars by default" in markdown
@@ -34,72 +32,8 @@ def test_agent_summary_includes_agent_visible_review_targets() -> None:
     assert "Scores:" in markdown
     assert "`relatedness" in markdown
     assert "Inspect: `codeseam explain rt_000001`" in markdown
-    assert "visibility: `agent_summary`" in markdown
+    assert "visibility: `listed`" in markdown
     assert markdown.count("Suggested action") == len(targets)
-
-
-def test_agent_summary_uses_visibility_not_priority() -> None:
-    visible = _full_target("rt_000001", "recommended_edit", "src/visible.py")
-    hidden = _full_target("rt_000002", "recommended_edit", "src/hidden.py")
-    hidden["visibility"] = "sidecar_only"
-    hidden["summary_eligible"] = False
-    targets = [visible, hidden]
-
-    markdown = render_agent_summary(
-        _report_for(targets),
-        {"targets": targets},
-        {
-            "internal_finding_count": 0,
-            "analysis_target_count": 2,
-            "observation_count": 0,
-            "recommended_edit_count": 1,
-        },
-    )
-
-    assert "`rt_000001`" in markdown
-    assert markdown.count("Suggested action") == 1
-
-
-def test_agent_summary_hides_low_value_low_refactorability_targets() -> None:
-    visible = _full_target("rt_000001", "recommended_edit", "src/visible.py")
-    weak = _full_target("rt_000002", "maintenance_note", "src/weak.py")
-    weak["refactor_value"] = "low"
-    weak["refactorability_score"] = 0.2
-    targets = [visible, weak]
-
-    markdown = render_agent_summary(
-        _report_for(targets),
-        {"targets": targets},
-        {
-            "internal_finding_count": 0,
-            "analysis_target_count": 2,
-            "observation_count": 0,
-            "recommended_edit_count": 1,
-        },
-    )
-
-    assert "`rt_000001`" in markdown
-    assert markdown.count("Suggested action") == 1
-
-
-def test_build_metrics_counts_recommended_edits_from_agent_visible_targets() -> None:
-    visible = _full_target("rt_000001", "recommended_edit", "src/visible.py")
-    visible["action_status"] = FindingActionStatus.RECOMMENDED_EDIT
-    hidden = _full_target("rt_000002", "recommended_edit", "src/hidden.py")
-    hidden["action_status"] = FindingActionStatus.RECOMMENDED_EDIT
-    hidden["visibility"] = "sidecar_only"
-    hidden["summary_eligible"] = False
-
-    metrics = build_metrics(
-        {"summary": {}, "artifact_index": {}},
-        [visible, hidden],
-        [],
-        [],
-    )
-
-    assert metrics["agent_visible_target_count"] == VISIBLE_RECOMMENDED_EDIT_COUNT
-    assert metrics["recommended_edit_tier_count"] == TOTAL_RECOMMENDED_EDIT_TIER_COUNT
-    assert metrics["recommended_edit_count"] == VISIBLE_RECOMMENDED_EDIT_COUNT
 
 
 def test_agent_summary_prefers_primary_action_members() -> None:
@@ -136,9 +70,8 @@ def test_agent_summary_prefers_primary_action_members() -> None:
 
     markdown = render_agent_summary(
         _report_for([target]),
-        {"targets": [target]},
+        [target],
         {
-            "internal_finding_count": 0,
             "analysis_target_count": 1,
             "observation_count": 0,
             "recommended_edit_count": 1,
@@ -156,7 +89,6 @@ def test_agent_summary_target_listing_can_be_capped() -> None:
         for index in range(1, 6)
     ]
     metrics: Json = {
-        "internal_finding_count": 0,
         "analysis_target_count": len(targets),
         "observation_count": 0,
         "recommended_edit_count": len(targets),
@@ -164,7 +96,7 @@ def test_agent_summary_target_listing_can_be_capped() -> None:
 
     markdown = render_agent_summary(
         _report_for(targets),
-        {"targets": targets},
+        targets,
         metrics,
         max_targets=2,
     )
@@ -178,7 +110,6 @@ def _report_for(targets: list[Json]) -> Json:
     return {
         "run": {"profile": "test", "status": {"ok": True}},
         "summary": {
-            "finding_count": 0,
             "review_target_count": len(targets),
             "targets_by_review_tier": {str(target["review_tier"]): 1 for target in targets},
         },
@@ -193,14 +124,14 @@ def _full_target(target_id: str, review_tier: str, *files: str) -> Json:
         "title": "Repeated shape",
         "review_tier": review_tier,
         "review_score": 0.8,
-        "visibility": "agent_summary",
+        "visibility": "listed",
         "summary_eligible": True,
         "evidence_strength": "strong",
         "relatedness_score": 0.8,
         "refactorability_score": 0.7,
         "abstraction_cost_score": 0.2,
         "risk_score": 0.1,
-        "evidence_classes": ["body_tree_similarity"],
+        "evidence_classes": ["body_structure_similarity"],
         "decision": {
             "review_tier": review_tier,
             "review_score": 0.8,
@@ -210,7 +141,7 @@ def _full_target(target_id: str, review_tier: str, *files: str) -> Json:
             "abstraction_cost_score": 0.2,
             "risk_score": 0.1,
             "confidence": 0.8,
-            "evidence_classes": ["body_tree_similarity"],
+            "evidence_classes": ["body_structure_similarity"],
             "rationale": ["fixture"],
         },
         "severity": "medium",

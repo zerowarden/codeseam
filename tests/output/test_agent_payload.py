@@ -6,6 +6,7 @@ from factories import agent_payload_fixture
 
 from codeseam.analysis import AssessmentBand, AssessmentGate
 from codeseam.output.serializers.findings import agent_review_target_payload
+from codeseam.platform import as_json_objects
 
 
 def test_agent_analysis_payload_is_lean_and_uses_failed_gates() -> None:
@@ -17,7 +18,10 @@ def test_agent_analysis_payload_is_lean_and_uses_failed_gates() -> None:
     )
 
     assert "metrics" not in payload
-    assert "locations" not in payload
+    assert all(
+        set(item) == {"file", "start_line", "end_line", "symbol"}
+        for item in as_json_objects(payload["locations"])
+    )
     assert "relatedness_score" not in payload
     assert "refactorability_score" not in payload
     assert "abstraction_cost_score" not in payload

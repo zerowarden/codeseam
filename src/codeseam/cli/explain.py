@@ -29,7 +29,7 @@ class ExplainRenderOptions:
 
 
 def load_explain(config: Config, target_id: str) -> Json | None:
-    paths = OutputPaths(config.path("output", "root"))
+    paths = OutputPaths(config.output_root)
     sidecars = (paths.artifact("agent_analysis"), paths.artifact("agent_observations"))
     if not any(path.exists() for path in sidecars):
         raise ConfigError(f"Explain sidecars not found: {paths.directory('agent')}")
@@ -96,8 +96,8 @@ def _compact_lines(item: Json) -> list[str]:
         (
             f"{text(item.get('target_id'))} {explain_review_tier(item)} "
             f"{_action_status(item)} "
-            f"conf={_short_float(_confidence(item))} "
-            f"safety={text(item.get('refactor_safety'))}"
+            + (f"conf={_short_float(confidence)} " if (confidence := _confidence(item)) else "")
+            + f"safety={text(item.get('refactor_safety'))}"
         ).strip(),
         f"{_shape(item)} | {_relation(item)}",
         ", ".join(_files(item)),

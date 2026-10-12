@@ -50,6 +50,7 @@ def test_structural_shingles_are_deterministic_and_categorized(
         "STMT:RETURN:ARG",
         "BIGRAM:ASSIGN:CALL->RETURN:ARG",
         "CALL:json.dumps",
+        "CALLEE:dumps",
         "FLOW:ARG->CALL",
         "FLOW:ARG->RETURN",
         "CTRL_CALL:TRY|CALL:json.dumps",
@@ -57,6 +58,7 @@ def test_structural_shingles_are_deterministic_and_categorized(
     assert {item.split(":", 1)[0] for item in shingles} == {
         "BIGRAM",
         "CALL",
+        "CALLEE",
         "CTRL_CALL",
         "FLOW",
         "STMT",

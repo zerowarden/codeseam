@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Final, Literal, final
+from typing import Final, Literal, cast, final
+
+from codeseam.platform import with_overrides
 
 type ConfigSection = Mapping[str, object]
 type RecommendationCapLabel = Literal[
@@ -53,10 +55,6 @@ class DetectionPolicy:
         default=0.72,
         metadata={"doc": "Confidence for argument normalization with shared-operation support."},
     )
-    proxy_base_confidence: float = field(
-        default=0.40,
-        metadata={"doc": "Confidence for call/control proxy evidence before support boosts."},
-    )
     signature_only_base_confidence: float = field(
         default=0.18,
         metadata={"doc": "Confidence for recurrence visible only through signature shape."},
@@ -69,21 +67,9 @@ class DetectionPolicy:
         default=0.85,
         metadata={"doc": "Maximum confidence for non-exact structural relation evidence."},
     )
-    proxy_quality_cap: float = field(
-        default=0.60,
-        metadata={"doc": "Maximum confidence for proxy-only evidence."},
-    )
     min_recurrence_members: int = field(
         default=2,
         metadata={"doc": "Minimum members before signature recurrence is considered evidence."},
-    )
-    structural_tree_support_threshold: float = field(
-        default=0.75,
-        metadata={"doc": "Tree similarity threshold that counts as structural support."},
-    )
-    structural_name_support_threshold: float = field(
-        default=0.65,
-        metadata={"doc": "Name similarity threshold that counts as structural support."},
     )
     high_extraction_multiplier: float = field(
         default=1.0,
@@ -152,7 +138,7 @@ class FitPolicy:
         metadata={"doc": "Stable statement count where common-region support is high."},
     )
     high_hole_count_at: int = field(
-        default=3,
+        default=4,
         metadata={"doc": "Hole count considered high abstraction complexity."},
     )
     high_hole_size_at: int = field(
@@ -379,17 +365,23 @@ class SemanticEvidencePolicy:
 
 @dataclass(frozen=True, slots=True)
 class AssessmentPolicy:
-    recommended_edit_threshold: float
-    review_candidate_threshold: float
-    high_band_threshold: float
-    medium_band_threshold: float
-    detection_relation_threshold: float
-    fit_high_threshold: float
-    fit_medium_threshold: float
-    risk_cautious_threshold: float
-    risk_block_threshold: float
-    cost_block_threshold: float
-    precision: int
+    """All assessment anchors; `[assessment]` in codeseam.toml overrides any of them.
+
+    Top-level keys set the thresholds below; `[assessment.<group>]` tables set the
+    nested groups (`detection`, `fit`, `payoff`, ...), field for field.
+    """
+
+    recommended_edit_threshold: float = 0.42
+    review_candidate_threshold: float = 0.12
+    high_band_threshold: float = 0.75
+    medium_band_threshold: float = 0.45
+    detection_relation_threshold: float = 0.35
+    fit_high_threshold: float = 0.75
+    fit_medium_threshold: float = 0.45
+    risk_cautious_threshold: float = 0.30
+    risk_block_threshold: float = 0.65
+    cost_block_threshold: float = 0.65
+    precision: int = 4
     detection: DetectionPolicy = field(default_factory=DetectionPolicy)
     fit: FitPolicy = field(default_factory=FitPolicy)
     payoff: PayoffPolicy = field(default_factory=PayoffPolicy)
@@ -399,49 +391,23 @@ class AssessmentPolicy:
 
     @classmethod
     def from_config(cls, config: ConfigSection) -> AssessmentPolicy:
-        del config
-        values = dict(DEFAULT_ASSESSMENT_VALUES)
-        return cls(
-            recommended_edit_threshold=_float(values, "recommended_edit_threshold"),
-            review_candidate_threshold=_float(values, "review_candidate_threshold"),
-            high_band_threshold=_float(values, "high_band_threshold"),
-            medium_band_threshold=_float(values, "medium_band_threshold"),
-            detection_relation_threshold=_float(values, "detection_relation_threshold"),
-            fit_high_threshold=_float(values, "fit_high_threshold"),
-            fit_medium_threshold=_float(values, "fit_medium_threshold"),
-            risk_cautious_threshold=_float(values, "risk_cautious_threshold"),
-            risk_block_threshold=_float(values, "risk_block_threshold"),
-            cost_block_threshold=_float(values, "cost_block_threshold"),
-            precision=int(_float(values, "precision")),
+        """Defaults with the validated `[assessment]` overrides; ValueError if invalid."""
+
+        section = config.get(ASSESSMENT_SECTION, {})
+        if not isinstance(section, Mapping):
+            raise ValueError(f"{ASSESSMENT_SECTION!r} must be a table of settings")
+        return with_overrides(
+            cls(), cast(Mapping[str, object], section), path=f"{ASSESSMENT_SECTION}."
         )
 
 
-DEFAULT_ASSESSMENT_VALUES: dict[str, object] = {
-    "recommended_edit_threshold": 0.42,
-    "review_candidate_threshold": 0.12,
-    "high_band_threshold": 0.75,
-    "medium_band_threshold": 0.45,
-    "detection_relation_threshold": 0.35,
-    "fit_high_threshold": 0.75,
-    "fit_medium_threshold": 0.45,
-    "risk_cautious_threshold": 0.30,
-    "risk_block_threshold": 0.65,
-    "cost_block_threshold": 0.65,
-    "precision": 4,
-}
-
-
-def _float(config: Mapping[str, object], key: str) -> float:
-    value = config[key]
-    if isinstance(value, int | float | str):
-        return float(value)
-    raise TypeError(f"Expected numeric assessment value for {key!r}.")
+ASSESSMENT_SECTION = "assessment"
 
 
 __all__ = [
     "AssessmentPolicy",
     "ConfigSection",
-    "DEFAULT_ASSESSMENT_VALUES",
+    "ASSESSMENT_SECTION",
     "DetectionPolicy",
     "FitPolicy",
     "PayoffPolicy",

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 from codeseam.analysis.signatures import OrderedTree, ordered_tree_size
 from codeseam.platform import common_prefix_length, common_suffix_length
 
 HOLE_PREFIX = "HOLE:"
+OPERATOR_PREFIX = "op:"
 ROLE_STATEMENT_SEQUENCE_DELTA = "statement_sequence_delta"
 ARGUMENT_RE = re.compile(r"\bARG[0-9]+\b")
 
@@ -45,45 +47,80 @@ class TreeSkeleton:
     max_hole_size: int
 
 
-def anti_unify_sequences(
+def anti_unify_sequences(  # noqa: PLR0913
     left: list[str],
     right: list[str],
     *,
+    left_keys: list[str] | None = None,
+    right_keys: list[str] | None = None,
     left_id: str = "left",
     right_id: str = "right",
 ) -> SequenceSkeleton:
-    matches = _lcs_matches(left, right)
-    builder = _SequenceSkeletonBuilder(left_id, right_id)
-    left_index = 0
-    right_index = 0
-    for match_left, match_right in matches:
-        builder.append_hole(
-            left[left_index:match_left],
-            right[right_index:match_right],
-        )
-        builder.template.append(SequenceTemplateItem("STABLE_STATEMENT", token=left[match_left]))
-        left_index = match_left + 1
-        right_index = match_right + 1
-    builder.append_hole(
-        left[left_index:],
-        right[right_index:],
+    """Align statements by key (content) and keep the tokens for the template."""
+
+    left_keys = left_keys or left
+    right_keys = right_keys or right
+    matches = _lcs_matches(left_keys, right_keys)
+    gaps = _gaps(matches, len(left), len(right))
+    # Statements present in gaps on both sides moved rather than changed
+    # (reordered guard clauses): they are stable, not holes.
+    moved = Counter(left_keys[i] for gap, _ in gaps for i in gap) & Counter(
+        right_keys[j] for _, gap in gaps for j in gap
     )
-    stable_count = len(matches)
+    left_budget, right_budget = moved.copy(), moved.copy()
+    builder = _SequenceSkeletonBuilder(left_id, right_id)
+    for (left_gap, right_gap), match in zip(gaps, [*matches, None], strict=True):
+        left_moved, left_kept = _split_moved(left_gap, left_keys, left_budget)
+        _, right_kept = _split_moved(right_gap, right_keys, right_budget)
+        builder.template.extend(
+            SequenceTemplateItem("STABLE_STATEMENT", token=left[index]) for index in left_moved
+        )
+        builder.append_hole([left[i] for i in left_kept], [right[j] for j in right_kept])
+        if match is not None:
+            builder.template.append(SequenceTemplateItem("STABLE_STATEMENT", token=left[match[0]]))
+    stable_count = len(matches) + moved.total()
     max_count = max(len(left), len(right), 1)
-    prefix = common_prefix_length(left, right)
+    prefix = common_prefix_length(left_keys, right_keys)
     return SequenceSkeleton(
         template=tuple(builder.template),
         hole_bindings=builder.bindings,
         stable_statement_count=stable_count,
         stable_node_ratio=round(stable_count / max_count, 4),
         common_prefix_length=prefix,
-        common_suffix_length=common_suffix_length(left, right, prefix),
+        common_suffix_length=common_suffix_length(left_keys, right_keys, prefix),
         common_prefix_ratio=round(prefix / max_count, 4),
         hole_count=len(builder.holes),
         max_hole_size=_max_hole_size(builder.holes),
         hole_size_variance=_hole_size_variance(builder.holes),
         shared_param_flow_through_holes=_shared_param_flow(builder.holes),
     )
+
+
+def _gaps(
+    matches: list[tuple[int, int]], left_count: int, right_count: int
+) -> list[tuple[list[int], list[int]]]:
+    """Unmatched index runs before each match, plus the trailing run."""
+
+    gaps: list[tuple[list[int], list[int]]] = []
+    left_index = right_index = 0
+    for match_left, match_right in [*matches, (left_count, right_count)]:
+        gaps.append((list(range(left_index, match_left)), list(range(right_index, match_right))))
+        left_index, right_index = match_left + 1, match_right + 1
+    return gaps
+
+
+def _split_moved(
+    indexes: list[int], keys: list[str], budget: Counter[str]
+) -> tuple[list[int], list[int]]:
+    moved: list[int] = []
+    kept: list[int] = []
+    for index in indexes:
+        if budget[keys[index]] > 0:
+            budget[keys[index]] -= 1
+            moved.append(index)
+        else:
+            kept.append(index)
+    return moved, kept
 
 
 def anti_unify_trees(
@@ -104,6 +141,48 @@ def anti_unify_trees(
         hole_count=builder.hole_count,
         max_hole_size=builder.max_hole_size,
     )
+
+
+def operator_changed(left: OrderedTree, right: OrderedTree) -> bool:
+    """Whether aligned code differs by an operator: substituted, added or removed.
+
+    A hole counts when its two sides are equal once operator leaves (`op:`) are
+    dropped and unary-operator wrappers unwrapped (`a + b`/`a - b`, `not x`/`x`).
+    Inserted statements that merely contain operators do not count.
+    """
+
+    skeleton = anti_unify_trees(left, right)
+    left_holes, right_holes = skeleton.hole_bindings["left"], skeleton.hole_bindings["right"]
+    return any(
+        _operator_labels(left_holes[hole]) != _operator_labels(right_holes[hole])
+        and _without_operators(left_holes[hole]) == _without_operators(right_holes[hole])
+        for hole in left_holes
+    )
+
+
+def _operator_labels(trees: tuple[OrderedTree, ...]) -> list[str]:
+    labels: list[str] = []
+    stack = list(trees)
+    while stack:
+        node = stack.pop()
+        if node.label.startswith(OPERATOR_PREFIX):
+            labels.append(node.label)
+        stack.extend(node.children)
+    return sorted(labels)
+
+
+def _without_operators(trees: tuple[OrderedTree, ...]) -> tuple[OrderedTree, ...]:
+    stripped: list[OrderedTree] = []
+    for tree in trees:
+        if tree.label.startswith(OPERATOR_PREFIX):
+            continue
+        has_operator = any(child.label.startswith(OPERATOR_PREFIX) for child in tree.children)
+        children = _without_operators(tree.children)
+        if has_operator and len(children) == 1:  # a unary-operator wrapper such as `not x`
+            stripped.append(children[0])
+        else:
+            stripped.append(OrderedTree(tree.label, children))
+    return tuple(stripped)
 
 
 class _SequenceSkeletonBuilder:
@@ -264,4 +343,5 @@ __all__ = [
     "TreeSkeleton",
     "anti_unify_sequences",
     "anti_unify_trees",
+    "operator_changed",
 ]

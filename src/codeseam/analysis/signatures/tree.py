@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Deeper body trees are not built: tree consumers (equality, anti-unification,
+# the cache codec) recurse once per level, and pairs without trees use proxies.
+MAX_TREE_DEPTH = 150
+
 
 @dataclass(frozen=True, slots=True)
 class OrderedTree:
@@ -10,7 +14,13 @@ class OrderedTree:
 
 
 def ordered_tree_size(tree: OrderedTree) -> int:
-    return 1 + sum(ordered_tree_size(child) for child in tree.children)
+    size = 0
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        size += 1
+        stack.extend(node.children)
+    return size
 
 
-__all__ = ["OrderedTree", "ordered_tree_size"]
+__all__ = ["MAX_TREE_DEPTH", "OrderedTree", "ordered_tree_size"]

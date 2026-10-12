@@ -5,7 +5,6 @@ from codeseam.analysis.assessment.definitions import (
     REVIEW_TIERS,
     FindingActionStatus,
     FindingReviewVisibility,
-    FindingVisibility,
     ReviewTier,
 )
 from codeseam.analysis.repository import (
@@ -20,6 +19,17 @@ from codeseam.analysis.repository import (
 from codeseam.analysis.repository.classification import classify_path
 from codeseam.analysis.repository.languages import detect_language, is_analysis_language
 from codeseam.analysis.signatures import (
+    DEFAULT_EXPRESSION,
+    AssignKind,
+    ControlKind,
+    StatementKind,
+    assign_token,
+    statement_token,
+    dataflow_graph_features,
+    literal_shapes,
+    normalization_transform_tokens,
+    receiver_shapes,
+    statement_arg_reads_from_graph,
     AdapterId,
     BoundarySpecificity,
     CalleeShape,
@@ -66,12 +76,11 @@ from codeseam.analysis.semantic_roles import (
     FunctionSemanticRoles,
     PathSemanticRoleOptions,
     async_path,
-    has_common_test_path_part,
     path_semantic_roles,
     sync_async_mirror_members,
     sync_async_mirror_pair,
 )
-from codeseam.analysis.inventory.ir import FunctionIR, ParamIR, signature_shape
+from codeseam.analysis.inventory.ir import FunctionIR, ParamIR, annotated_shape, signature_shape
 from codeseam.analysis.inventory.model import (
     FileWithoutFunctionUnits,
     FunctionInventory,
@@ -96,7 +105,6 @@ from codeseam.analysis.relations.models import (
     AbstractionCostComponents,
     ActionStatus,
     ArgumentNormalization,
-    CachedRelationSummary,
     CloneClassification,
     DeltaKind,
     MemberFeatureCache,
@@ -117,7 +125,6 @@ from codeseam.analysis.relations.models import (
     SequenceComparison,
     SimilarityScores,
     TreeComparison,
-    sequence_skeleton_summary,
 )
 from codeseam.analysis.relations.policy import (
     PAIR_POLICY,
@@ -132,7 +139,13 @@ from codeseam.analysis.relations.unification import (
     anti_unify_trees,
 )
 from codeseam.analysis.relations.actions import pair_actions
-from codeseam.analysis.relations.callables import callsite_evidence_kinds, is_callable_return
+from codeseam.analysis.relations.callables import (
+    UNRESOLVED_RECEIVER,
+    CallsiteTracker,
+    callsite_evidence_kinds,
+    is_cache_name,
+    is_callable_return,
+)
 from codeseam.analysis.relations.enrichment import RelationPairBuilder
 from codeseam.analysis.relations.features import member_features
 from codeseam.analysis.relations.normalization import (
@@ -142,7 +155,6 @@ from codeseam.analysis.relations.normalization import (
 )
 from codeseam.analysis.relations.pairs import (
     ActionBuilder,
-    TreeEditBudget,
     feature_member_ref,
     relation_pair_from_features,
 )
@@ -158,7 +170,6 @@ from codeseam.analysis.assessment import (
     AssessmentBreakdown,
     AssessmentGate,
     AssessmentPolicy,
-    ContextClassification,
     DetectionConfidence,
     DetectionPolicy,
     EvidenceQuality,
@@ -181,11 +192,11 @@ from codeseam.analysis.assessment.cluster import (
     Clusters,
     ClusterSummary,
     PolicyConstantCluster,
+    PolicyConstantMatch,
     StructuralSubcluster,
 )
 from codeseam.analysis.assessment.cluster.build import build_clusters
 from codeseam.analysis.assessment.cluster.policy_constants import build_policy_constant_clusters
-from codeseam.analysis.assessment.context import classify_contexts
 from codeseam.analysis.assessment.detection import score_detection_confidence
 from codeseam.analysis.assessment.evidence import (
     EVIDENCE_ANTI_UNIFICATION_TEMPLATE,
@@ -213,17 +224,29 @@ from codeseam.analysis.findings import (
     SemanticEvidenceMetrics,
 )
 from codeseam.analysis.findings.drafts import (
-    _promotable_exact_pairs,
-    _should_promote_structural_pairs,
     _structural_metrics,
     _sync_async_member_pair,
 )
 from codeseam.analysis.findings.identity import primary_action
 from codeseam.analysis.findings.review import review_tier_counts
 from codeseam.analysis.findings.semantic_evidence import SemanticEvidenceIndex
+from codeseam.analysis.findings.surfacing import SurfacedFindings, surface_findings
 
 __all__ = [
+    "DEFAULT_EXPRESSION",
+    "AssignKind",
+    "ControlKind",
+    "StatementKind",
+    "assign_token",
+    "statement_token",
+    "dataflow_graph_features",
+    "literal_shapes",
+    "normalization_transform_tokens",
+    "receiver_shapes",
+    "statement_arg_reads_from_graph",
+    "surface_findings",
     "API_SURFACE_ROLES",
+    "UNRESOLVED_RECEIVER",
     "AbstractionCostComponents",
     "AbstractionFit",
     "AbstractionKind",
@@ -239,10 +262,10 @@ __all__ = [
     "AssessmentGate",
     "AssessmentPolicy",
     "BoundarySpecificity",
-    "CachedRelationSummary",
     "CallFingerprint",
     "CalleeShape",
     "CallsitePattern",
+    "CallsiteTracker",
     "CandidateGenerationSummary",
     "CloneClass",
     "CloneClassification",
@@ -251,7 +274,6 @@ __all__ = [
     "ClusterMember",
     "ClusterSummary",
     "Clusters",
-    "ContextClassification",
     "DataflowEdge",
     "DataflowGraph",
     "DataflowNode",
@@ -279,7 +301,6 @@ __all__ = [
     "FindingMetrics",
     "FindingReviewVisibility",
     "FindingTargetType",
-    "FindingVisibility",
     "FunctionIR",
     "FunctionInventory",
     "FunctionRecord",
@@ -302,6 +323,7 @@ __all__ = [
     "PathSemanticRoleOptions",
     "PolicyConstant",
     "PolicyConstantCluster",
+    "PolicyConstantMatch",
     "RELATION_ASSESSMENT_POLICY",
     "REVIEW_TIERS",
     "ROLE_STATEMENT_SEQUENCE_DELTA",
@@ -325,6 +347,7 @@ __all__ = [
     "ScoreBand",
     "SemanticCapAssessment",
     "SemanticEvidenceIndex",
+    "SurfacedFindings",
     "SemanticEvidenceMetrics",
     "SemanticRisk",
     "SequenceComparison",
@@ -344,10 +367,7 @@ __all__ = [
     "StructuralSubcluster",
     "TREE_EDIT_POLICY",
     "TreeComparison",
-    "TreeEditBudget",
     "call_kwarg_shape_values",
-    "_promotable_exact_pairs",
-    "_should_promote_structural_pairs",
     "_structural_metrics",
     "_sync_async_member_pair",
     "abstraction_estimate",
@@ -365,9 +385,9 @@ __all__ = [
     "build_policy_constant_clusters",
     "build_repository_facts",
     "callsite_evidence_kinds",
+    "is_cache_name",
     "candidates",
     "canonical_shape",
-    "classify_contexts",
     "classify_path",
     "classify_signature_type",
     "collection_element_type_class",
@@ -380,7 +400,6 @@ __all__ = [
     "function_cache_payload",
     "functions_from_cache_value",
     "has_argument_normalization_transform",
-    "has_common_test_path_part",
     "is_analysis_language",
     "is_callable_return",
     "is_test_member",
@@ -404,13 +423,13 @@ __all__ = [
     "score_maintenance_payoff",
     "score_semantic_risk",
     "semantic_cap_for",
-    "sequence_skeleton_summary",
     "shared_operation_candidate",
     "signature_analysis_from_core",
     "signature_analysis_from_record",
     "signature_analysis_key",
     "signature_core_from_record",
     "signature_shape",
+    "annotated_shape",
     "similarity",
     "structural_shingles",
     "sync_async_mirror_members",

@@ -13,6 +13,7 @@ def signature_locations(cluster: Cluster) -> list[FindingLocation]:
             source="signature",
             kind="signature_shape",
             symbol=member.signature.symbol,
+            container=member.signature.container or "",
         )
         for member in cluster.members
     ]

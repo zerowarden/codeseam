@@ -8,3 +8,7 @@ class ConfigError(CodeseamError):
 
 class RepositoryContextError(CodeseamError):
     exit_code = 2
+
+
+class SourceChangedError(OSError):
+    """A file no longer has the content the repository scan hashed."""

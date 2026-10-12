@@ -11,7 +11,9 @@ from codeseam.analysis.relations.policy import (
     PAIR_POLICY,
     RELATION_ASSESSMENT_POLICY,
     STRUCTURAL_POLICY,
+    TREE_EDIT_POLICY,
 )
+from codeseam.analysis.relations.similarity import EXACT_TREE_SOURCES
 
 type CloneMetadata = tuple[CloneClass, str]
 
@@ -23,14 +25,21 @@ EXTRACT_REGION_RELATIONS: frozenset[RelationKind] = frozenset(
     }
 )
 
+ABSTRACTION_RELATIONS: frozenset[RelationKind] = frozenset(
+    {RelationKind.COMMON_WRAPPER_DIFFERENT_CORE, RelationKind.SAME_STATEMENTS_DIFFERENT_ORDER}
+)
+
 RELATION_CLONE_METADATA: dict[RelationKind, CloneMetadata] = {
     RelationKind.NONE: (
         CloneClass.SIGNATURE_SIGNAL_ONLY,
         "boundary_only",
     ),
+    # A normalized body hash renames locals (and abstracts literals in ECMAScript),
+    # so a match proves at most a Type-2 clone. BODY_IDENTICAL only means the
+    # copies also share a name.
     RelationKind.BODY_IDENTICAL: (
-        CloneClass.TYPE_1_EXACT,
-        "exact_normalized_body",
+        CloneClass.TYPE_2_PARAMETERIZED,
+        "same_name_normalized_body",
     ),
     RelationKind.BODY_PARAMETERIZED: (
         CloneClass.TYPE_2_PARAMETERIZED,
@@ -67,6 +76,11 @@ RELATION_CLONE_METADATA: dict[RelationKind, CloneMetadata] = {
     RelationKind.SAME_ARGUMENT_FLOW_DIFFERENT_CONTROL: (
         CloneClass.CONTRACT_ANALOGY,
         "contract_analogy",
+    ),
+    # Same statements reordered: order can carry meaning, so it is recorded, not merged.
+    RelationKind.SAME_STATEMENTS_DIFFERENT_ORDER: (
+        CloneClass.TYPE_3_NEAR_MISS,
+        "same_statements_different_order",
     ),
     RelationKind.SAME_CALL_SET_DIFFERENT_ORDER: (
         CloneClass.CONTRACT_ANALOGY,
@@ -113,10 +127,10 @@ def default_action(
         action = ActionKind.RECORD_SHARED_CONCERN
     elif relation_kind == RelationKind.ARGUMENT_NORMALIZATION_WRAPPER:
         action = ActionKind.REUSE_EXISTING_HELPER
-    elif clone_type in {CloneClass.TYPE_1_EXACT, CloneClass.TYPE_2_PARAMETERIZED}:
+    elif clone_type == CloneClass.TYPE_2_PARAMETERIZED:
         action = ActionKind.CONSOLIDATE_CLONE
     elif (
-        relation_kind == RelationKind.COMMON_WRAPPER_DIFFERENT_CORE
+        relation_kind in ABSTRACTION_RELATIONS
         and refactorability >= RELATION_ASSESSMENT_POLICY.refactorability_medium_threshold
     ):
         action = ActionKind.INTRODUCE_ABSTRACTION
@@ -136,14 +150,18 @@ def clone_basis_for(context: CloneClassificationInput) -> tuple[str, ...]:
     if context.scores.name >= STRUCTURAL_POLICY.name_similarity_threshold:
         basis.append("normalized_name_similarity")
     if (
-        context.tree_distance_source in {"body_hash", "ordered_tree_edit_distance"}
+        context.tree_distance_source in EXACT_TREE_SOURCES
         and context.tree_similarity >= STRUCTURAL_POLICY.tree_similarity_threshold
     ):
-        basis.append("body_tree_similarity")
+        basis.append("body_structure_similarity")
     if context.parameter_similarity >= PAIR_POLICY.parameter_flow_threshold:
         basis.append("parameter_use_similarity")
     if context.call_similarity >= PAIR_POLICY.call_fingerprint_threshold:
         basis.append("call_fingerprint_overlap")
+    if context.scores.graph >= TREE_EDIT_POLICY.graph_threshold:
+        basis.append("local_dataflow_similarity")
+    if context.flags.shared_control_context:
+        basis.append("control_context_similarity")
     if context.sequence.lcs_length >= STRUCTURAL_POLICY.min_statement_lcs_length:
         basis.append("statement_sequence_alignment")
     if (

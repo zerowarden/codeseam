@@ -67,11 +67,9 @@ def _commonality(metrics: FindingMetrics, anchors: FitPolicy) -> tuple[float, li
 
     reasons: list[str] = []
     base = max(
-        metrics.max_refactorability_score or 0.0,
+        metrics.lead_refactorability_score or 0.0,
         anchors.body_hash_commonality if metrics.body_hash_match_count else 0.0,
-        anchors.structural_duplicate_commonality
-        if metrics.intra_function_duplicate_block_count
-        else 0.0,
+        anchors.structural_duplicate_commonality if metrics.duplicate_block_count else 0.0,
         anchors.policy_constant_commonality if metrics.policy_constant_duplicate_count else 0.0,
         anchors.structural_duplicate_commonality
         if metrics.structural_duplicate_pair_count
@@ -82,12 +80,12 @@ def _commonality(metrics: FindingMetrics, anchors: FitPolicy) -> tuple[float, li
         else 0.0,
     )
 
-    if metrics.max_refactorability_score:
+    if metrics.lead_refactorability_score:
         reasons.append("relation_refactorability")
     if metrics.body_hash_match_count:
         reasons.append("body_hash_match")
-    if metrics.intra_function_duplicate_block_count:
-        reasons.append("intra_function_duplicate")
+    if metrics.duplicate_block_count:
+        reasons.append("duplicate_block")
     if metrics.policy_constant_duplicate_count:
         reasons.append("policy_constant_duplicate")
     if metrics.structural_duplicate_pair_count:
@@ -100,7 +98,7 @@ def _commonality(metrics: FindingMetrics, anchors: FitPolicy) -> tuple[float, li
         reasons.append("no_commonality")
 
     stable_region = ramp(
-        metrics.max_stable_statement_count,
+        metrics.lead_stable_statement_count,
         low=anchors.stable_region_medium_at - 1,
         high=anchors.stable_region_high_at,
     )
@@ -113,7 +111,7 @@ def _commonality(metrics: FindingMetrics, anchors: FitPolicy) -> tuple[float, li
     if (
         metrics.structural_duplicate_pair_count
         or metrics.body_hash_match_count
-        or metrics.intra_function_duplicate_block_count
+        or metrics.duplicate_block_count
         or metrics.policy_constant_duplicate_count
     ):
         return clamp01(max(base, stable_region)), reasons
@@ -134,7 +132,7 @@ def _semantic_commonality_supported(metrics: FindingMetrics, anchors: FitPolicy)
     return (
         metrics.semantic_evidence.shared_implementation_pair_count > 0
         and has_relation_pairs(metrics)
-        and metrics.max_stable_statement_count >= anchors.stable_region_medium_at
+        and metrics.lead_stable_statement_count >= anchors.stable_region_medium_at
     )
 
 
@@ -144,8 +142,8 @@ def _structural_relation_commonality(metrics: FindingMetrics, anchors: FitPolicy
     return max(
         anchors.structural_relation_floor,
         anchors.structural_relation_commonality,
-        metrics.max_tree_similarity * anchors.tree_similarity_weight,
-        metrics.max_relatedness_score * anchors.relatedness_weight,
+        metrics.lead_tree_similarity * anchors.tree_similarity_weight,
+        metrics.lead_relatedness_score * anchors.relatedness_weight,
     )
 
 
@@ -165,19 +163,19 @@ def _simplicity(
     if not _hole_metrics_available(metrics, evidence) and _holes_matter(metrics):
         reasons.append("hole_metrics_unavailable")
         return anchors.unknown_hole_simplicity, reasons
-    hole_count = inverse_ramp(metrics.max_hole_count, low=0, high=anchors.high_hole_count_at)
-    hole_size = inverse_ramp(metrics.max_hole_size, low=0, high=anchors.high_hole_size_at)
-    if metrics.max_hole_count:
+    hole_count = inverse_ramp(metrics.lead_hole_count, low=0, high=anchors.high_hole_count_at)
+    hole_size = inverse_ramp(metrics.lead_hole_size, low=0, high=anchors.high_hole_size_at)
+    if metrics.lead_hole_count:
         reasons.append("anti_unification_holes")
-    if metrics.max_hole_size:
+    if metrics.lead_hole_size:
         reasons.append("large_holes")
     return min(hole_count, hole_size), reasons
 
 
 def _hole_metrics_available(metrics: FindingMetrics, evidence: EvidenceSummary) -> bool:
     return (
-        metrics.max_hole_count > 0
-        or metrics.max_hole_size > 0
+        metrics.lead_hole_count > 0
+        or metrics.lead_hole_size > 0
         or evidence.has(EVIDENCE_ANTI_UNIFICATION_TEMPLATE)
     )
 
@@ -187,13 +185,13 @@ def _holes_matter(metrics: FindingMetrics) -> bool:
         has_relation_pairs(metrics)
         and not metrics.structural_duplicate_pair_count
         and not metrics.body_hash_match_count
-        and not metrics.intra_function_duplicate_block_count
+        and not metrics.duplicate_block_count
         and not metrics.policy_constant_duplicate_count
     )
 
 
 def _explicit_cost(metrics: FindingMetrics) -> float:
-    return clamp01(metrics.max_abstraction_cost_score or 0.0)
+    return clamp01(metrics.lead_abstraction_cost_score or 0.0)
 
 
 def _fit_cap(
@@ -205,24 +203,24 @@ def _fit_cap(
     cap = 1.0
     reasons: list[str] = []
 
-    if metrics.max_abstraction_cost_score >= anchors.high_abstraction_cost_at:
+    if metrics.lead_abstraction_cost_score >= anchors.high_abstraction_cost_at:
         cap = min(cap, anchors.high_cost_cap)
         reasons.append("high_abstraction_cost_cap")
 
-    if metrics.max_relation_risk_score >= anchors.high_relation_risk_at:
+    if metrics.lead_risk_score >= anchors.high_relation_risk_at:
         cap = min(cap, anchors.high_risk_cap)
         reasons.append("high_relation_risk_cap")
-    elif metrics.max_relation_risk_score:
-        cap = min(cap, max(anchors.high_risk_cap, 1.0 - metrics.max_relation_risk_score))
+    elif metrics.lead_risk_score:
+        cap = min(cap, max(anchors.high_risk_cap, 1.0 - metrics.lead_risk_score))
         reasons.append("relation_risk")
 
     if (
-        metrics.max_stable_statement_count <= 1
+        metrics.lead_stable_statement_count <= 1
         and has_relation_pairs(metrics)
         and not editable_skeleton
         and not metrics.structural_duplicate_pair_count
         and not metrics.body_hash_match_count
-        and not metrics.intra_function_duplicate_block_count
+        and not metrics.duplicate_block_count
         and not metrics.policy_constant_duplicate_count
     ):
         cap = min(cap, anchors.weak_common_region_cap)

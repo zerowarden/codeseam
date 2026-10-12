@@ -12,7 +12,9 @@ class LanguageRegistry:
         self._by_language = _index_adapters(adapters, lambda adapter: adapter.languages)
 
     def adapter_for_language(self, language: str) -> LanguageAdapter | None:
-        return self._adapter_for(self._by_language, language)
+        """Case-insensitive: records store `typescript`, adapters declare `TypeScript`."""
+
+        return self._by_language.get(language.casefold())
 
     def capability_summaries(
         self,
@@ -42,13 +44,6 @@ class LanguageRegistry:
             matcher for adapter in self._adapters() for matcher in adapter.manifest_matchers
         )
 
-    def _adapter_for(
-        self,
-        registry: dict[str, LanguageAdapter],
-        key: str,
-    ) -> LanguageAdapter | None:
-        return registry.get(key)
-
     def _adapters(self) -> tuple[LanguageAdapter, ...]:
         return tuple(dict.fromkeys(self._by_language.values()))
 
@@ -63,4 +58,4 @@ def _index_adapters(
     adapters: list[LanguageAdapter],
     keys_for: Callable[[LanguageAdapter], Iterable[str]],
 ) -> dict[str, LanguageAdapter]:
-    return {key: adapter for adapter in adapters for key in keys_for(adapter)}
+    return {key.casefold(): adapter for adapter in adapters for key in keys_for(adapter)}

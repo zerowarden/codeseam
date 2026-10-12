@@ -43,12 +43,12 @@ class FunctionSemanticRole(StrEnum):
     NORMAL_FUNCTION = "normal_function"
     OPERATOR_OVERLOAD = "operator_overload"
     OVERLOAD_SIGNATURE = "overload_signature"
-    PREDICATE_BOUNDARY = "predicate_boundary"
     PROPERTY_ACCESSOR = "property_accessor"
     PUBLIC_API_MIRROR = "public_api_mirror"
     PYTHON_SPECIAL_METHOD = "python_special_method"
     SYNC_ASYNC_MIRROR = "sync_async_mirror"
     TEST_CODE = "test_code"
+    TRIVIAL_BODY = "trivial_body"
     TYPING_OVERLOAD = "typing_overload"
 
 
@@ -107,38 +107,12 @@ class FunctionSemanticRoles:
 class PathSemanticRoleOptions:
     generated_path_parts: tuple[str, ...] = ()
     generated_name_markers: tuple[str, ...] = ()
-    test_name_prefixes: tuple[str, ...] = ()
-    test_name_suffixes: tuple[str, ...] = ()
     declaration_suffixes: tuple[str, ...] = ()
 
 
 DEFAULT_PATH_SEMANTIC_ROLE_OPTIONS = PathSemanticRoleOptions()
 
 
-COMMON_GENERATED_PATH_PARTS = frozenset(
-    {
-        ".yarn",
-        "build",
-        "coverage",
-        "dist",
-        "gen",
-        "generated",
-        "node_modules",
-        "third-party",
-        "third_party",
-        "vendor",
-    }
-)
-
-COMMON_TEST_PATH_PART_PATTERNS = (
-    r"__tests__",
-    r"fixtures?",
-    r"integration[-_]tests?",
-    r"specs?",
-    r"tests?",
-    r"testing",
-)
-COMMON_TEST_PATH_PART_RE = re.compile(rf"^(?:{'|'.join(COMMON_TEST_PATH_PART_PATTERNS)})$")
 COMMON_EXAMPLE_PATH_PARTS = frozenset({"demo", "demos", "example", "examples"})
 
 
@@ -175,10 +149,9 @@ def path_semantic_roles(
 ) -> FunctionSemanticRoles:
     """Classify language-neutral path surfaces that cap edit recommendations.
 
-    Language adapters still own syntax-specific role detection. This helper
-    centralizes repository-role and path topology signals so test/example/
-    generated guardrails stay consistent across native and Tree-sitter
-    frontends.
+    Test, generated, vendored and build-output files are recognised once, by
+    the repository scan (`classify_path`), and arrive here as
+    `repository_role`; the options add language-specific generated markers.
     """
 
     return _path_semantic_roles_cached(file_path, repository_role.lower(), options)
@@ -191,12 +164,8 @@ def _path_semantic_roles_cached(
     options: PathSemanticRoleOptions,
 ) -> FunctionSemanticRoles:
     facts = path_facts(file_path)
-    generated_parts = COMMON_GENERATED_PATH_PARTS | frozenset(
-        part.lower() for part in options.generated_path_parts
-    )
+    generated_parts = frozenset(part.lower() for part in options.generated_path_parts)
     generated_markers = _lower_tuple(options.generated_name_markers)
-    test_prefixes = _lower_tuple(options.test_name_prefixes)
-    test_suffixes = _lower_tuple(options.test_name_suffixes)
     declaration_suffixes = _lower_tuple(options.declaration_suffixes)
     roles: list[FunctionSemanticRole] = []
     reasons: list[str] = []
@@ -211,12 +180,7 @@ def _path_semantic_roles_cached(
             FunctionSemanticRole.GENERATED_OR_CYTHON_BOUNDARY,
             "generated, vendored, or build-output code is not a direct edit target",
         )
-    if (
-        repository_role in {"test", "fixture"}
-        or has_common_test_path_part(facts.parts)
-        or facts.name.startswith(test_prefixes)
-        or facts.name.endswith(test_suffixes)
-    ):
+    if repository_role in {"test", "fixture"}:
         _add_role(
             roles,
             reasons,
@@ -253,11 +217,8 @@ def role_labels(roles: Iterable[FunctionSemanticRole | str]) -> tuple[RoleLabel,
 
 
 def role_counts(values: Iterable[FunctionSemanticRole | str]) -> dict[RoleLabel, int]:
-    return dict(Counter(role_labels(values)))
-
-
-def has_common_test_path_part(parts: Iterable[str]) -> bool:
-    return any(COMMON_TEST_PATH_PART_RE.match(part.lower()) for part in parts)
+    """Per-member role counts; caps compare them with the member count, so never dedupe."""
+    return dict(Counter(label for role in values if (label := role_label(role))))
 
 
 def role_set(counts: Mapping[str, int] | None) -> frozenset[str]:
@@ -333,8 +294,6 @@ __all__ = [
     "ASYNC_PATH_MARKERS",
     "API_SURFACE_ROLES",
     "COMMON_EXAMPLE_PATH_PARTS",
-    "COMMON_GENERATED_PATH_PARTS",
-    "COMMON_TEST_PATH_PART_RE",
     "DECLARATION_SURFACE_ROLES",
     "DEFAULT_PATH_SEMANTIC_ROLE_OPTIONS",
     "FunctionSemanticRole",
@@ -345,7 +304,6 @@ __all__ = [
     "PROTOCOL_SURFACE_ROLES",
     "RoleLabel",
     "async_path",
-    "has_common_test_path_part",
     "path_facts",
     "path_semantic_roles",
     "role_counts",

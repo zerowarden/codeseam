@@ -4,7 +4,14 @@ from dataclasses import dataclass, field
 from os import stat_result
 from pathlib import Path
 
-from codeseam.platform import Json, JsonValue, as_json_object, loads_json, write_jsonable_atomic
+from codeseam.platform import (
+    Json,
+    JsonValue,
+    as_json_object,
+    is_count,
+    loads_json,
+    write_jsonable_atomic,
+)
 from codeseam.version import SCAN_MANIFEST_SCHEMA_VERSION
 
 SCAN_MANIFEST_FILENAME = "scan_manifest.json"
@@ -109,7 +116,7 @@ def _entry_from_payload(value: object) -> ScanManifestEntry | None:
     if not isinstance(value, list | tuple) or len(value) != ENTRY_FIELD_COUNT:
         return None
     size_bytes, mtime_ns, ctime_ns, line_count, content_hash = value
-    if not all(_valid_int(item) for item in (size_bytes, mtime_ns, ctime_ns, line_count)):
+    if not all(is_count(item) for item in (size_bytes, mtime_ns, ctime_ns, line_count)):
         return None
     if not isinstance(content_hash, str) or not content_hash.startswith("sha256:"):
         return None
@@ -120,10 +127,6 @@ def _entry_from_payload(value: object) -> ScanManifestEntry | None:
         line_count=line_count,
         content_hash=content_hash,
     )
-
-
-def _valid_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 __all__ = [

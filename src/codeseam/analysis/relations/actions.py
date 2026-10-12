@@ -12,9 +12,21 @@ from codeseam.analysis.relations.models import (
 )
 from codeseam.analysis.relations.policy import PAIR_POLICY, RELATION_ASSESSMENT_POLICY
 
+ABSTRACTION_PRECONDITIONS: dict[RelationKind, tuple[str, ...]] = {
+    RelationKind.COMMON_WRAPPER_DIFFERENT_CORE: (
+        "same_signature_shape",
+        "shared_wrapper_sequence",
+        "different_core_operation",
+    ),
+    # Reordered statements share one helper only if their order does not matter.
+    RelationKind.SAME_STATEMENTS_DIFFERENT_ORDER: (
+        "same_statement_multiset",
+        "statement_order_is_not_significant",
+    ),
+}
 PARAMETERIZED_SKELETON_PRECONDITIONS = (
     "same_signature_shape",
-    "near_identical_body_tree",
+    "near_identical_body_structure",
     "parameterized_skeleton",
 )
 
@@ -91,7 +103,7 @@ def pair_actions(context: PairActionInput) -> list[RefactorAction]:
                 rejection_reasons=("COMMON_REGION_TOO_SMALL",),
             ),
         ]
-    if relation_kind == RelationKind.COMMON_WRAPPER_DIFFERENT_CORE:
+    if preconditions := ABSTRACTION_PRECONDITIONS.get(relation_kind):
         rejection_reasons = _wrapper_rejection_reasons(abstraction_cost)
         primary_action = (
             ActionKind.DO_NOT_REFACTOR if rejection_reasons else ActionKind.INTRODUCE_ABSTRACTION
@@ -105,11 +117,7 @@ def pair_actions(context: PairActionInput) -> list[RefactorAction]:
                 status=primary_status,
                 confidence=round(max(0.6, min(confidence, refactorability)), 4),
                 applies_to=tuple(applies_to),
-                preconditions=(
-                    "same_signature_shape",
-                    "shared_wrapper_sequence",
-                    "different_core_operation",
-                ),
+                preconditions=preconditions,
                 reason_codes=delta_codes,
                 rejection_reasons=tuple(rejection_reasons),
             ),

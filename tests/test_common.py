@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+
+import pytest
 
 from codeseam.analysis import (
     OrderedTree,
     ordered_tree_edit_distance,
     ordered_tree_size,
 )
+from codeseam.analysis.relations.tree_distance import tree_shape
 from codeseam.platform import (
     basename,
     cached_identifier_tokens,
@@ -15,6 +20,7 @@ from codeseam.platform import (
     identifier_tokens,
     is_binary,
     is_public_identifier,
+    jaccard,
     json_digest,
     json_float,
     json_text_keys,
@@ -32,6 +38,7 @@ from codeseam.platform import (
     similarity_ratio,
     single_line,
     string_tuple,
+    with_overrides,
     write_jsonable_atomic,
     write_jsonl_jsonable_atomic,
 )
@@ -112,15 +119,47 @@ def test_similarity_helpers_score_sets_and_counters() -> None:
     )
 
 
-def test_ordered_tree_edit_distance_scores_relabels_and_inserts() -> None:
-    left = OrderedTree("Module", (OrderedTree("Return"),))
-    relabeled = OrderedTree("Module", (OrderedTree("Raise"),))
-    inserted = OrderedTree("Module", (OrderedTree("Return"), OrderedTree("Name")))
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [
+        (lambda: jaccard(set(), set()), 0.0),
+        (lambda: counter_jaccard(Counter(), Counter()), 0.0),
+        (lambda: mean_jaccard_by_key({"ARG0": set()}, {"ARG0": set()}), 0.0),
+        (lambda: mean_jaccard_by_key({"ARG0": {"read"}, "ARG1": set()}, {"ARG0": {"read"}}), 1.0),
+    ],
+    ids=["empty-sets", "empty-counters", "unused-key", "unused-key-is-skipped"],
+)
+def test_shared_absence_is_not_similarity(score: Callable[[], float], expected: float) -> None:
+    assert score() == expected
 
-    assert ordered_tree_size(inserted) == TREE_SIZE
-    assert ordered_tree_edit_distance(left, left) == 0
-    assert ordered_tree_edit_distance(left, relabeled) == 1
-    assert ordered_tree_edit_distance(left, inserted) == 1
+
+def _t(label: str, *children: OrderedTree) -> OrderedTree:
+    return OrderedTree(label, children)
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "distance"),
+    [
+        (_t("m", _t("ret")), _t("m", _t("ret")), 0),
+        (_t("m", _t("ret")), _t("m", _t("raise")), 1),
+        (_t("m", _t("ret")), _t("m", _t("ret"), _t("name")), 1),
+        (_t("r", _t("a"), _t("b")), _t("r", _t("b")), 1),
+        (_t("r"), _t("r", _t("a", _t("b"), _t("c"))), 3),
+        (_t("f", _t("a"), _t("b", _t("c"))), _t("f", _t("a"), _t("x", _t("c")), _t("d")), 2),
+    ],
+    ids=["same", "relabel", "insert", "delete-first", "insert-subtree", "relabel-and-insert"],
+)
+def test_ordered_tree_edit_distance(left: OrderedTree, right: OrderedTree, distance: int) -> None:
+    assert ordered_tree_edit_distance(left, right) == distance
+    assert ordered_tree_edit_distance(right, left) == distance
+
+
+def test_ordered_tree_size_and_shape() -> None:
+    tree = _t("Module", _t("Return"), _t("Name"))
+    relabeled = _t("Body", _t("Raise"), _t("Attr"))
+
+    assert ordered_tree_size(tree) == TREE_SIZE
+    assert tree_shape(tree) == tree_shape(relabeled) != tree_shape(_t("Module", _t("Return")))
 
 
 def test_json_helpers_keep_common_json_actions_in_one_place(tmp_path: Path) -> None:
@@ -136,3 +175,47 @@ def test_json_helpers_keep_common_json_actions_in_one_place(tmp_path: Path) -> N
     assert json_text_keys({"items": {"b": 2, "a": 1}}, "items") == ["a", "b"]
     assert json_digest({"b": 2, "a": 1}) == json_digest({"a": 1, "b": 2})
     assert len(load_jsonl_objects(jsonl_path)) == EXPECTED_JSONL_OBJECT_COUNT
+
+
+@dataclass(frozen=True)
+class _Inner:
+    count: int = 1
+    ratio: float = 0.5
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
+class _Outer:
+    label: str = "x"
+    inner: _Inner = field(default_factory=_Inner)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"inner": {"count": 3}}, _Outer(inner=_Inner(count=3))),
+        ({"inner": {"ratio": 1}}, _Outer(inner=_Inner(ratio=1.0))),
+        ({"label": "y", "inner": {"enabled": True}}, _Outer("y", _Inner(enabled=True))),
+    ],
+    ids=["nested-int", "int-for-float", "str-and-bool"],
+)
+def test_with_overrides_applies_typed_values(
+    overrides: dict[str, object], expected: _Outer
+) -> None:
+    assert with_overrides(_Outer(), overrides) == expected
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"missing": 1}, "unknown setting 'missing'"),
+        ({"inner": {"count": 1.5}}, "'inner.count' must be int"),
+        ({"inner": {"count": True}}, "'inner.count' must be int"),
+        ({"inner": {"enabled": 1}}, "'inner.enabled' must be bool"),
+        ({"inner": 2}, "'inner' is a table"),
+    ],
+    ids=["unknown", "float-for-int", "bool-for-int", "int-for-bool", "scalar-for-table"],
+)
+def test_with_overrides_rejects_invalid_values(overrides: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        with_overrides(_Outer(), overrides)

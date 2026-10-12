@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 
 from codeseam import cli
+from codeseam.adapters.languages import (
+    LanguageAdapterAnalysis,
+    LanguageAnalysisContext,
+    default_language_registry,
+)
 from codeseam.analysis import FileRecord
 from codeseam.cache import PersistentCache, persistent_cache
 from codeseam.cli import OK
@@ -163,7 +168,7 @@ def target_record(target_id: str) -> dict[str, object]:
 def file_record(
     path: str,
     *,
-    content_hash: str = "sha256:test",
+    content_hash: str = "",
     role: str = "source",
     language: str = "Python",
     is_test: bool | None = None,
@@ -180,3 +185,19 @@ def file_record(
         is_test=role == "test" if is_test is None else is_test,
         is_build_output=False,
     )
+
+
+SOURCE_FILES = {"Python": "mod.py", "TypeScript": "mod.ts"}
+
+
+def extract_source(
+    directory: Path, language: str, source: str, *, role: str = "source"
+) -> LanguageAdapterAnalysis:
+    """Write `source` as one file under `directory` and run its language adapter on it."""
+
+    path = directory / SOURCE_FILES[language]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source, encoding="utf-8")
+    adapter = default_language_registry().adapter_for_language(language)
+    assert adapter is not None
+    return adapter.extract_analysis(LanguageAnalysisContext(path, path.name, role, language))

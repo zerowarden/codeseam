@@ -39,20 +39,17 @@ def _signature_features(
         member=relation_member,
         body_hash=relation_member.body_shape_hash,
         body_shape=relation_member.body_shape,
-        body_tree_payload=None,
+        body_tree_payload=analysis_features.body_tree if analysis_features else None,
         tree_node_count=core.body_tree_node_count or 0,
         normalized_name=core.normalized_symbol or core.symbol,
         role=core.role,
         statements=statements,
-        statement_fingerprint=hash(statements),
         calls=calls,
-        call_set=frozenset(calls),
         call_fingerprints=analysis_features.call_fingerprints if analysis_features else (),
         call_counts=Counter(calls),
         parameter_default_roles=dict(analysis_features.parameter_default_roles)
         if analysis_features
         else {},
-        parameter_vectors={},
         local_dataflow_graph=DataflowGraph(),
         graph_features=analysis_features.graph_features if analysis_features else frozenset(),
         literal_shapes=analysis_features.literal_shapes if analysis_features else frozenset(),
@@ -71,6 +68,7 @@ def _signature_features(
             core.raise_statement_count,
         ),
         body_line_count=core.body_line_count,
+        statement_keys=tuple(core.statement_keys),
     )
 
 

@@ -1,7 +1,6 @@
 # Codeseam Agent Audit Summary
 
 ## Executive Summary
-- Internal findings: {{ metrics.internal_finding_count|md_text }}
 - Analysis targets: {{ metrics.analysis_target_count|md_text }}
 - Observations: {{ metrics.observation_count|md_text }}
 - Recommended-edit tier: {{ metrics.recommended_edit_tier_count|md_text }}
@@ -32,18 +31,6 @@
    - Inspect: {{ target.inspect_command|md_code }}
 {{ "" }}
 {% endfor %}
-{% endif %}
-
-{% if weak_recurrence_families %}
-## Grouped Weak Recurrence Families
-Weak recurrence families hidden from action summary:
-{% for family in weak_recurrence_families %}
-- {{ family.label|md_text }}: {{ family.cluster_count|md_text }} {{ family.cluster_word|md_text }}
-{% for example in family.examples %}
-  - Example: {{ example.target_id|md_code }} - {{ example.title|md_text }} ({{ example.review_tier|md_code }}, score {{ example.review_score|md_code }})
-{% endfor %}
-{% endfor %}
-
 {% endif %}
 
 ## Guardrails

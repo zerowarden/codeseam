@@ -5,7 +5,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from codeseam.adapters.languages import (
-    LanguageAdapter,
     LanguageRegistry,
     RelationDetailProvider,
     RelationDetailRequest,
@@ -40,6 +39,7 @@ from codeseam.cache import (
 )
 from codeseam.config import Config
 from codeseam.pipeline.file_analysis import analyze_selected_files
+from codeseam.platform import SourceChangedError, content_ids, qualified_symbol
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ def build_signature_artifacts(  # noqa: PLR0913
         clusters=build_clusters(
             signatures,
             relation_pair_builder=cached_relation_pair_builder(caches),
-            split_test=config.relation_policy_enabled("split_test"),
+            split_test=config.split_test,
             feature_hydrator=_relation_feature_hydrator(
                 _RelationHydrationContext(
                     repo_root=config.repo_root,
@@ -160,9 +160,17 @@ def _assign_ids(signatures: list[SignatureAnalysis]) -> list[SignatureAnalysis]:
             item.core.canonical_shape,
         ),
     )
+    keys = [
+        (
+            item.core.file,
+            qualified_symbol(item.core.symbol, item.core.container),
+            item.core.shape_hash,
+            item.core.body_shape_hash,
+        )
+        for item in ordered
+    ]
     updated: list[SignatureAnalysis] = []
-    for index, signature in enumerate(ordered, 1):
-        signature_id = f"sigrec_{index:06d}"
+    for signature, signature_id in zip(ordered, content_ids("sigrec_", keys), strict=True):
         updated.append(
             replace(
                 signature,
@@ -232,7 +240,12 @@ def _hydrate_relation_features(
     for key, plan in plans.items():
         if key in hydrated:
             continue
-        features = _hydrate_relation_detail(plan, hydration)
+        try:
+            features = _hydrate_relation_detail(plan, hydration)
+        except SourceChangedError:
+            # Compare on the extracted signature alone; never cache detail for new content.
+            hydrated[key] = plan.signature
+            continue
         hydrated[key] = replace(plan.signature, features=features)
         if plan.cache_key:
             features_by_cache_key[plan.cache_key] = features
@@ -250,7 +263,7 @@ def _relation_detail_plan(
     file_record = hydration.facts.records_by_path.get(core.file)
     if file_record is None:
         return None
-    adapter = _adapter_for_language(hydration.registry, core.language)
+    adapter = hydration.registry.adapter_for_language(core.language)
     if adapter is None:
         return None
     provider = relation_detail_provider(adapter)
@@ -295,12 +308,6 @@ def _hydrate_relation_detail(
     )
 
 
-def _adapter_for_language(registry: LanguageRegistry, language: str) -> LanguageAdapter | None:
-    return registry.adapter_for_language(language) or registry.adapter_for_language(
-        language.title()
-    )
-
-
 def _has_relation_detail(features: SignatureAnalysisFeatures) -> bool:
     return bool(
         features.graph_features
@@ -310,6 +317,7 @@ def _has_relation_detail(features: SignatureAnalysisFeatures) -> bool:
         or features.normalization_transform_tokens
         or features.statement_arg_reads
         or features.call_fingerprints
+        or features.body_tree is not None
     )
 
 

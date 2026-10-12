@@ -26,6 +26,9 @@ def structural_shingles(features: MemberFeatures) -> frozenset[str]:
         if left and right
     )
     shingles.update(f"CALL:{call}" for call in calls)
+    # The operation name without its receiver or qualifier, so renamed data paths
+    # (`users.map` / `products.map`, `User.from_json` / `Product.from_json`) still meet.
+    shingles.update(f"CALLEE:{call.rsplit('.', 1)[-1]}" for call in calls)
     shingles.update(_dataflow_shingles(features, statements))
     shingles.update(_control_call_shingles(features, calls))
     return frozenset(shingles)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -68,11 +68,9 @@ class DataflowNode:
 
 @dataclass(frozen=True, slots=True)
 class DataflowEdge:
-    from_id: str
-    to_id: str
     kind: str
-    from_label: str = ""
-    to_label: str = ""
+    from_label: str
+    to_label: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +98,12 @@ class OperationCompact:
     return_count: int = 0
     statement_arg_reads: tuple[tuple[int, tuple[str, ...]], ...] = ()
     statement_sequence: tuple[str, ...] = ()
+    # One digest per top-level statement over its normalized subtree (operators,
+    # callees and literals kept; parameters and locals renamed), aligned with
+    # `statement_sequence`, so comparisons match statements by content.
+    statement_keys: tuple[str, ...] = ()
+    statement_spans: tuple[tuple[int, int], ...] = ()  # line span per statement key
+    body_tree: OrderedTree | None = None  # relation-detail tier only
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +168,7 @@ class PolicyConstant:
     literal_kind: str
     literal_shape_hash: str
     literal_preview: str
+    literal_items: tuple[str, ...] = ()  # one canonical form per element or `key:value`
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "start_line", _line_number(self.start_line, default=1))
@@ -255,6 +260,8 @@ class SignatureRecord:
     body_tree: OrderedTree | None
     body_tree_node_count: int
     statement_sequence: list[str] = field(default_factory=list)
+    statement_keys: tuple[str, ...] = ()
+    statement_spans: tuple[tuple[int, int], ...] = ()  # line span per statement key
     call_tokens: tuple[str, ...] = ()
     call_fingerprints: tuple[CallFingerprint, ...] = ()
     parameter_use_vectors: dict[str, ParameterUseVector] = field(default_factory=dict)
@@ -308,6 +315,8 @@ class SignatureCore:
     body_shape_hash: str
     body_tree_node_count: int
     statement_sequence: tuple[str, ...] = ()
+    statement_keys: tuple[str, ...] = ()
+    statement_spans: tuple[tuple[int, int], ...] = ()  # line span per statement key
     call_tokens: tuple[str, ...] = ()
     control_context_vector: tuple[str, ...] = ()
     return_signature: tuple[str, ...] = ()
@@ -325,6 +334,8 @@ class SignatureCore:
         object.__setattr__(self, "type_source", _signature_type_source(self.type_source))
         object.__setattr__(self, "parameters", tuple(self.parameters))
         object.__setattr__(self, "statement_sequence", tuple(self.statement_sequence))
+        object.__setattr__(self, "statement_keys", tuple(self.statement_keys))
+        object.__setattr__(self, "statement_spans", tuple(self.statement_spans))
         object.__setattr__(self, "call_tokens", tuple(self.call_tokens))
         object.__setattr__(self, "control_context_vector", tuple(self.control_context_vector))
         object.__setattr__(self, "return_signature", tuple(self.return_signature))
@@ -382,6 +393,7 @@ class SignatureAnalysisFeatures:
     normalization_transform_tokens: frozenset[str] = field(default_factory=frozenset)
     statement_arg_reads: tuple[tuple[int, tuple[str, ...]], ...] = ()
     call_fingerprints: tuple[CallFingerprint, ...] = ()
+    body_tree: OrderedTree | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,6 +479,8 @@ def _core_from_record(
         body_shape_hash=record.body_shape_hash,
         body_tree_node_count=record.body_tree_node_count,
         statement_sequence=statements,
+        statement_keys=tuple(record.statement_keys),
+        statement_spans=tuple(record.statement_spans),
         call_tokens=call_tokens,
         control_context_vector=controls,
         return_signature=tuple(item for item in statements if item.startswith("RETURN:")),
@@ -485,7 +499,7 @@ def _features_from_record(
     calls: tuple[CallFingerprint, ...],
 ) -> SignatureAnalysisFeatures:
     parameter_features = {
-        role: frozenset(_parameter_vector_features(vector))
+        role: frozenset(parameter_vector_features(vector))
         for role, vector in record.parameter_use_vectors.items()
     }
     return SignatureAnalysisFeatures(
@@ -493,15 +507,15 @@ def _features_from_record(
         call_fingerprints=calls,
         parameter_default_roles=tuple(sorted(record.parameter_default_roles.items())),
         graph_features=record.graph_features
-        or frozenset(_graph_features(record.local_dataflow_graph)),
+        or frozenset(dataflow_graph_features(record.local_dataflow_graph)),
         literal_shapes=record.literal_shapes
-        or frozenset(_literal_shapes(record.parameter_default_roles, calls)),
-        receiver_shapes=record.receiver_shapes or frozenset(_receiver_shapes(calls)),
+        or frozenset(literal_shapes(record.parameter_default_roles, calls)),
+        receiver_shapes=record.receiver_shapes or frozenset(receiver_shapes(calls)),
         parameter_features=tuple(sorted((record.parameter_features or parameter_features).items())),
         normalization_transform_tokens=frozenset(record.normalization_transform_tokens)
-        or frozenset(_normalization_transform_tokens(calls)),
+        or frozenset(normalization_transform_tokens(calls)),
         statement_arg_reads=record.statement_arg_reads
-        or tuple(_statement_arg_reads(record.local_dataflow_graph)),
+        or tuple(statement_arg_reads_from_graph(record.local_dataflow_graph)),
     )
 
 
@@ -539,19 +553,19 @@ def _line_number(value: object, *, default: int) -> int:
         return default
 
 
-def _graph_features(graph: DataflowGraph) -> set[str]:
+def dataflow_graph_features(graph: DataflowGraph) -> set[str]:
+    """Nodes and edges by label only.
+
+    Statement positions are left out, so one inserted statement changes the
+    edges next to it, not every edge after it. Both adapters emit this form.
+    """
+
     features = {f"node:{node.kind}:{node.label}" for node in graph.nodes}
-    features.update(
-        f"edge:{edge.kind}:{edge.from_id}:{edge.from_label}->{edge.to_id}:{edge.to_label}"
-        for edge in graph.edges
-    )
+    features.update(f"edge:{edge.kind}:{edge.from_label}->{edge.to_label}" for edge in graph.edges)
     return features
 
 
-def _literal_shapes(
-    default_roles: dict[str, str],
-    calls: tuple[CallFingerprint, ...],
-) -> set[str]:
+def literal_shapes(default_roles: Mapping[str, str], calls: Iterable[CallFingerprint]) -> set[str]:
     shapes = {value for value in default_roles.values() if value.startswith("CONST_")}
     for call in calls:
         shapes.update(value for value in call.arg_roles if value.startswith("CONST_"))
@@ -561,7 +575,7 @@ def _literal_shapes(
     return shapes
 
 
-def _receiver_shapes(calls: tuple[CallFingerprint, ...]) -> set[str]:
+def receiver_shapes(calls: Iterable[CallFingerprint]) -> set[str]:
     shapes: set[str] = set()
     for call in calls:
         receiver = call.receiver_shape
@@ -573,16 +587,18 @@ def _receiver_shapes(calls: tuple[CallFingerprint, ...]) -> set[str]:
     return shapes
 
 
-def _parameter_vector_features(vector: ParameterUseVector) -> set[str]:
+def parameter_vector_features(vector: ParameterUseVector) -> set[str]:
+    """Positive usage facts only: an unused parameter has no features, not `returned:False`."""
     features: set[str] = set()
     features.update(f"access_paths:{item}" for item in vector.access_paths)
     features.update(f"receiver_of_calls:{item}" for item in vector.receiver_of_calls)
     features.update(f"passed_as_argument_to:{item}" for item in vector.passed_as_argument_to)
-    features.add(f"returned:{vector.returned}")
+    if vector.returned:
+        features.add("returned")
     return features
 
 
-def _normalization_transform_tokens(calls: tuple[CallFingerprint, ...]) -> set[str]:
+def normalization_transform_tokens(calls: Iterable[CallFingerprint]) -> set[str]:
     tokens: set[str] = set()
     for call in calls:
         receiver = call.receiver_shape
@@ -607,7 +623,7 @@ def _all_constant_roles(values: Iterable[object]) -> bool:
     return all(isinstance(item, str) and item.startswith("CONST_") for item in values)
 
 
-def _statement_arg_reads(graph: DataflowGraph) -> list[tuple[int, tuple[str, ...]]]:
+def statement_arg_reads_from_graph(graph: DataflowGraph) -> list[tuple[int, tuple[str, ...]]]:
     reads: list[tuple[int, tuple[str, ...]]] = []
     for node in graph.nodes:
         if node.kind != "statement" or not node.id.startswith("STMT") or not node.arg_reads:
@@ -619,6 +635,12 @@ def _statement_arg_reads(graph: DataflowGraph) -> list[tuple[int, tuple[str, ...
 
 
 __all__ = [
+    "NORMALIZATION_TRANSFORM_METHODS",
+    "dataflow_graph_features",
+    "literal_shapes",
+    "normalization_transform_tokens",
+    "receiver_shapes",
+    "statement_arg_reads_from_graph",
     "NORMALIZATION_TRANSFORM_METHODS",
     "CallFingerprint",
     "CalleeShape",

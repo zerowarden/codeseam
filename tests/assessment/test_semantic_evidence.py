@@ -6,7 +6,6 @@ from typing import Any
 
 from codeseam.analysis import (
     AssessmentBand,
-    AssessmentPolicy,
     EvidenceSummary,
     FindingMetrics,
     SemanticEvidenceIndex,
@@ -29,7 +28,7 @@ from codeseam.semantics import (
     SemanticSymbolIdentity,
 )
 
-POLICY = AssessmentPolicy.from_config(load_config(Path("/repo")).data)
+POLICY = load_config(Path("/repo")).assessment
 
 
 @dataclass(frozen=True)
@@ -105,7 +104,7 @@ def test_semantic_support_boosts_structural_detection_but_not_signature_only() -
     base = FindingMetrics(
         member_count=2,
         structural_relation_pair_count=1,
-        max_relation_confidence_score=0.50,
+        lead_confidence_score=0.50,
     )
     supported = replace(
         base,
@@ -149,7 +148,7 @@ def test_semantic_support_improves_fit_only_when_common_region_exists() -> None:
     base = FindingMetrics(
         member_count=2,
         structural_relation_pair_count=1,
-        max_refactorability_score=0.50,
+        lead_refactorability_score=0.50,
     )
     no_region = score_abstraction_fit(
         replace(
@@ -159,13 +158,13 @@ def test_semantic_support_improves_fit_only_when_common_region_exists() -> None:
         POLICY,
     )
     with_region = score_abstraction_fit(
-        replace(base, max_stable_statement_count=2),
+        replace(base, lead_stable_statement_count=2),
         POLICY,
     )
     supported_region = score_abstraction_fit(
         replace(
             base,
-            max_stable_statement_count=2,
+            lead_stable_statement_count=2,
             semantic_evidence=SemanticEvidenceMetrics(shared_call_target_pair_count=1),
         ),
         POLICY,

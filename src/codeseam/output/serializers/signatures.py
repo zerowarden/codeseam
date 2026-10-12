@@ -19,7 +19,6 @@ from codeseam.analysis import (
 )
 from codeseam.output.serializers.relations import (
     action_payload,
-    context_classification_payload,
     member_ref_payload,
     relation_pair_payload,
 )
@@ -221,10 +220,6 @@ def cluster_enrichment_payload(enrichment: ClusterEnrichment) -> Json:
         "abstraction_risks": [
             abstraction_risk_payload(risk) for risk in enrichment.abstraction_risks
         ],
-        "context_classifications": [
-            context_classification_payload(classification)
-            for classification in enrichment.context_classifications
-        ],
     }
 
 
@@ -309,6 +304,7 @@ def policy_constant_cluster_payload(cluster: PolicyConstantCluster) -> Json:
     return {
         "schema_version": cluster.schema_version,
         "cluster_id": cluster.cluster_id,
+        "match": cluster.match.value,
         "language": cluster.language,
         "shape_hash": cluster.shape_hash,
         "canonical_shape": cluster.canonical_shape,

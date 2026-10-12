@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
 
+from codeseam.adapters.languages.python.semantic_roles import classify_python_semantic_roles
 from codeseam.adapters.languages.python.signatures import extract_python_analysis
 from codeseam.analysis import FunctionSemanticRole
 
@@ -108,8 +110,8 @@ def test_python_adapter_uses_repository_role_for_test_code() -> None:
         ("src/generated_models.py", "source", FunctionSemanticRole.GENERATED_OR_CYTHON_BOUNDARY),
         ("src/model_cy.py", "source", FunctionSemanticRole.GENERATED_OR_CYTHON_BOUNDARY),
         ("src/vendor/api.py", "vendor", FunctionSemanticRole.GENERATED_OR_CYTHON_BOUNDARY),
-        ("src/tests/semantic_role_surfaces.py", "source", FunctionSemanticRole.TEST_CODE),
-        ("src/foo_test.py", "source", FunctionSemanticRole.TEST_CODE),
+        ("src/tests/semantic_role_surfaces.py", "test", FunctionSemanticRole.TEST_CODE),
+        ("src/conftest.py", "fixture", FunctionSemanticRole.TEST_CODE),
     ),
 )
 def test_python_adapter_classifies_non_source_path_roles(
@@ -127,3 +129,36 @@ def _roles_for(records: tuple[object, ...], symbol: str) -> set[FunctionSemantic
         if getattr(record, "symbol", "") == symbol:
             return {FunctionSemanticRole(role) for role in getattr(record, "semantic_roles", ())}
     raise AssertionError(f"Missing fixture symbol {symbol!r}.")
+
+
+@pytest.mark.parametrize(
+    ("body", "trivial"),
+    [
+        ("return False", True),
+        ("return", True),
+        ("return value", True),
+        ("return self._value", True),
+        ("return self.items[0]", True),
+        ("collect_errors(item.config)", True),
+        ("return Formatter.format(self, tokens, *rest, out=stream)", True),
+        ("return await self.client.fetch(value)", True),
+        ("self._value = value", True),
+        ("pass", True),
+        ('"""Docstring only."""', True),
+        ("return Base.score(value) - 0.05", False),
+        ('return " ".join(str(value or "").split())', False),
+        ('return f"<{self.name}>"', False),
+        ("return value if value else None", False),
+        ("self._count += 1", False),
+        ("value = load(value)\n    return value", False),
+    ],
+)
+def test_one_operation_bodies_are_trivial(body: str, trivial: bool) -> None:
+    (node,) = ast.parse(f"def member(self, value, item, *rest):\n    {body}\n").body
+    assert isinstance(node, ast.FunctionDef)
+
+    roles = classify_python_semantic_roles(
+        node, file_path="src/members.py", repository_role="source", body_line_count=2
+    ).roles
+
+    assert (FunctionSemanticRole.TRIVIAL_BODY.value in roles) is trivial

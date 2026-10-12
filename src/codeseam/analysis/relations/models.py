@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from codeseam.analysis.relations.feature_model import MemberFeatureCache, MemberFeatures
 from codeseam.analysis.relations.kinds import (
@@ -34,16 +34,12 @@ class SimilarityScores:
     call: float
     sequence: float
     graph: float
+    # Components neither member has evidence for ("parameter", "call", "graph"):
+    # they are left out of relatedness instead of counting as agreement or disagreement.
+    absent: frozenset[str] = frozenset()
 
     def with_tree(self, value: float) -> SimilarityScores:
-        return SimilarityScores(
-            name=self.name,
-            tree=value,
-            parameter=self.parameter,
-            call=self.call,
-            sequence=self.sequence,
-            graph=self.graph,
-        )
+        return replace(self, tree=value)
 
 
 @dataclass(frozen=True)
@@ -175,6 +171,7 @@ class RelationFlags:
     call_multiset_differs: bool
     same_call_multiset: bool
     control_vector_differs: bool
+    shared_control_context: bool
     parameter_flow_match: bool
     same_return_shape: bool
     same_error_shape: bool
@@ -336,61 +333,10 @@ class RefactorShape:
     schema_version: str = "codeseam.refactor_shape.v1"
 
 
-@dataclass(frozen=True, slots=True)
-class AntiUnificationSummary:
-    stable_statement_count: int = 0
-    stable_node_ratio: float = 0.0
-    common_prefix_length: int = 0
-    common_suffix_length: int = 0
-    common_prefix_ratio: float = 0.0
-    hole_count: int = 0
-    max_hole_size: int = 0
-    hole_size_variance: str = ""
-    shared_param_flow_through_holes: bool = False
-
-
-def sequence_skeleton_summary(skeleton: SequenceSkeleton) -> AntiUnificationSummary:
-    return AntiUnificationSummary(
-        stable_statement_count=skeleton.stable_statement_count,
-        stable_node_ratio=skeleton.stable_node_ratio,
-        common_prefix_length=skeleton.common_prefix_length,
-        common_suffix_length=skeleton.common_suffix_length,
-        common_prefix_ratio=skeleton.common_prefix_ratio,
-        hole_count=skeleton.hole_count,
-        max_hole_size=skeleton.max_hole_size,
-        hole_size_variance=skeleton.hole_size_variance,
-        shared_param_flow_through_holes=skeleton.shared_param_flow_through_holes,
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class CachedRelationSummary:
-    cache_key: str
-    scores: RelationScores
-    tree: TreeComparison
-    sequence: SequenceComparison
-    flags: RelationFlags
-    normalization: ArgumentNormalization
-    anti_unification: AntiUnificationSummary
-    relation_kind: RelationKind
-    relation_kinds: tuple[RelationKind, ...]
-    clone_family: CloneClass
-    clone_type: CloneClass
-    recommended_action: ActionKind
-    refactorability_kind: ScoreBand
-    delta_kinds: tuple[DeltaKind, ...]
-    same_role: bool
-    role: str
-    max_body_line_count: int
-    min_body_line_count: int = 0
-    refactor_action_candidates: tuple[RefactorAction, ...] = ()
-
-
 @dataclass(frozen=True)
 class RelationPair:
     abstraction_cost_components: AbstractionCostComponents
     anti_unification: SequenceSkeleton
-    anti_unification_summary: AntiUnificationSummary
     clone_classification: CloneClassification
     clone_family: CloneClass
     clone_type: CloneClass
@@ -422,12 +368,10 @@ __all__ = [
     "AbstractionCostComponents",
     "AbstractionEstimate",
     "AbstractionKind",
-    "AntiUnificationSummary",
     "ArgumentNormalization",
     "ActionKind",
     "ActionStatus",
     "CALLSITE_EVIDENCE_KINDS",
-    "CachedRelationSummary",
     "CloneClass",
     "CloneClassification",
     "CloneClassificationInput",
@@ -462,5 +406,4 @@ __all__ = [
     "TreeEditDecision",
     "member_ref",
     "member_digest_from_parts",
-    "sequence_skeleton_summary",
 ]

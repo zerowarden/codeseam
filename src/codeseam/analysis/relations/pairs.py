@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from functools import lru_cache
 
 from codeseam.analysis.relations.clones import clone_classification_for
@@ -27,10 +27,9 @@ from codeseam.analysis.relations.models import (
     SimilarityScores,
     TreeComparison,
     TreeEditDecision,
-    sequence_skeleton_summary,
 )
 from codeseam.analysis.relations.normalization import argument_normalization_relation_features
-from codeseam.analysis.relations.policy import PAIR_POLICY, STRUCTURAL_POLICY, TREE_EDIT_POLICY
+from codeseam.analysis.relations.policy import PAIR_POLICY, STRUCTURAL_POLICY
 from codeseam.analysis.relations.scoring import (
     abstraction_cost_components_features,
     component_sum,
@@ -42,34 +41,29 @@ from codeseam.analysis.relations.scoring import (
 )
 from codeseam.analysis.relations.shapes import refactor_shape_from_features
 from codeseam.analysis.relations.similarity import (
+    EXACT_TREE_SOURCES,
+    ORDERED_TREE_EDIT_SOURCE,
     TREE_EDIT_PRODUCT_LIMIT_SOURCE,
+    absent_components,
     call_multiset_similarity_features,
     graph_similarity_features,
+    has_body_trees,
     parameter_use_similarity_features,
     same_call_multiset_features,
     sequence_alignment_features,
-    should_compare_tree_features,
     tree_comparison_features,
     tree_edit_product_exceeds_limit,
     tree_proxy_comparison_features,
 )
-from codeseam.analysis.relations.unification import SequenceSkeleton, anti_unify_sequences
+from codeseam.analysis.relations.unification import (
+    SequenceSkeleton,
+    anti_unify_sequences,
+    operator_changed,
+)
 from codeseam.platform import increment_stat, similarity_ratio
 
 ActionBuilder = Callable[[PairActionInput], list[RefactorAction]]
 TreeComparisonProvider = Callable[[MemberFeatures, MemberFeatures], TreeComparison]
-
-
-@dataclass
-class TreeEditBudget:
-    limit: int = TREE_EDIT_POLICY.run_budget
-    used: int = 0
-
-    def try_consume(self) -> bool:
-        if self.used >= self.limit:
-            return False
-        self.used += 1
-        return True
 
 
 def relation_pairs(
@@ -78,7 +72,6 @@ def relation_pairs(
     action_builder: ActionBuilder,
     feature_cache: MemberFeatureCache | None = None,
     stats: dict[str, int] | None = None,
-    tree_edit_budget: TreeEditBudget | None = None,
 ) -> list[RelationPair]:
     increment_stat(stats, "candidate_pair_count", len(candidate_pairs))
     if not candidate_pairs:
@@ -106,7 +99,6 @@ def relation_pairs(
             right_features,
             action_builder=action_builder,
             stats=stats,
-            tree_edit_budget=tree_edit_budget,
         )
         if pair is not None:
             pairs.append(pair)
@@ -139,13 +131,12 @@ def structural_duplicate_pairs(relation_pairs: list[RelationPair]) -> list[Relat
     ][: STRUCTURAL_POLICY.structural_pair_limit]
 
 
-def relation_pair_from_features(  # noqa: PLR0913
+def relation_pair_from_features(
     left_features: MemberFeatures,
     right_features: MemberFeatures,
     *,
     action_builder: ActionBuilder,
     stats: dict[str, int] | None = None,
-    tree_edit_budget: TreeEditBudget | None = None,
     tree_comparison_provider: TreeComparisonProvider = tree_comparison_features,
 ) -> RelationPair | None:
     left_name = left_features.normalized_name
@@ -163,6 +154,7 @@ def relation_pair_from_features(  # noqa: PLR0913
         call=call_similarity,
         sequence=sequence.sequence_similarity,
         graph=graph,
+        absent=absent_components(left_features, right_features),
     )
     tree_gate = tree_edit_decision(
         left_features,
@@ -173,28 +165,26 @@ def relation_pair_from_features(  # noqa: PLR0913
     if tree_gate.reject:
         increment_stat(stats, "pre_tree_rejected_count")
         return None
-    if tree_gate.compare_edit_distance and tree_gate.tree_distance_source == "body_hash":
-        increment_stat(stats, "tree_edit_body_hash_count")
-        tree = tree_comparison_provider(left_features, right_features)
-    elif tree_gate.compare_edit_distance and _tree_edit_budget_available(
-        stats,
-        tree_edit_budget,
-    ):
-        increment_stat(stats, "tree_edit_requested_count")
-        tree = tree_comparison_provider(left_features, right_features)
-    else:
-        increment_stat(
-            stats,
-            "tree_edit_budget_exhausted_count"
-            if tree_gate.compare_edit_distance
-            else "tree_edit_skipped_count",
-        )
+    # Every pair gets the comparison its own features allow (the edit-product
+    # limit bounds the cost), so results never depend on what was compared first.
+    if not tree_gate.compare_edit_distance:
+        increment_stat(stats, "tree_edit_skipped_count")
         tree = tree_proxy_comparison_features(
             left_features,
             right_features,
             proxy_similarity=tree_gate.proxy_tree_similarity,
             source=tree_gate.tree_distance_source,
         )
+    elif tree_gate.tree_distance_source == "body_hash":
+        increment_stat(stats, "tree_edit_body_hash_count")
+        tree = tree_comparison_provider(left_features, right_features)
+    elif has_body_trees(left_features, right_features):
+        increment_stat(stats, "tree_edit_requested_count")
+        tree = tree_comparison_provider(left_features, right_features)
+    else:
+        # Proxies are not cached: a later run with trees must measure the pair.
+        increment_stat(stats, "tree_edit_unavailable_count")
+        tree = tree_comparison_features(left_features, right_features)
     tree_similarity = tree.tree_similarity
     similarity_scores = cheap_scores.with_tree(tree_similarity)
     relatedness = relatedness_score(similarity_scores)
@@ -202,7 +192,12 @@ def relation_pair_from_features(  # noqa: PLR0913
         relatedness = max(relatedness, PAIR_POLICY.min_argument_normalization_relatedness)
     if relatedness < PAIR_POLICY.relatedness_minimum:
         return None
-    deltas = delta_kinds(left_features, right_features, parameter_similarity, normalization)
+    # No parameter evidence on either side is not evidence that argument flow differs.
+    parameter_mismatch = (
+        "parameter" not in cheap_scores.absent
+        and parameter_similarity < PAIR_POLICY.parameter_flow_threshold
+    )
+    deltas = delta_kinds(left_features, right_features, parameter_mismatch, normalization)
     risk = risk_score(deltas)
     anti = anti_unification_from_features(
         sequence,
@@ -214,7 +209,7 @@ def relation_pair_from_features(  # noqa: PLR0913
         right_features,
         anti_unification=anti,
         deltas=deltas,
-        parameter_similarity=parameter_similarity,
+        parameter_mismatch=parameter_mismatch,
     )
     cost = component_sum(cost_components)
     refactor_components = refactorability_components_features(
@@ -314,7 +309,6 @@ def relation_pair_from_features(  # noqa: PLR0913
         refactorability_kind=refactorability_kind(refactorability),
         delta_kinds=tuple(deltas),
         anti_unification=anti,
-        anti_unification_summary=sequence_skeleton_summary(anti),
         refactor_action_candidates=tuple(action_builder(action_context)),
         same_role=left_features.role == right_features.role,
         role=left_features.role,
@@ -352,6 +346,8 @@ def relation_kind(
         relation = RelationKind.SAME_SKELETON_DIFFERENT_LITERALS
     elif same_tree and left_features.call_counts != right_features.call_counts:
         relation = RelationKind.SAME_SKELETON_DIFFERENT_CALLEES
+    elif _same_statements_reordered(left_features, right_features):
+        relation = RelationKind.SAME_STATEMENTS_DIFFERENT_ORDER
     elif basis.flags.parameter_flow_match and basis.flags.control_vector_differs:
         relation = RelationKind.SAME_ARGUMENT_FLOW_DIFFERENT_CONTROL
     elif prefix > 0 and suffix > 0 and _has_wrapper_evidence(basis):
@@ -385,14 +381,21 @@ def relation_basis(
             left_features.body_hash and left_features.body_hash == right_features.body_hash
         ),
         same_signature_shape=left_features.member.shape_hash == right_features.member.shape_hash,
+        # Same skeleton: an exact measurement, and only relabels apart. An inserted
+        # statement can still score >= 0.9 but is a Type-3 change, not a skeleton match.
         same_tree=(
-            context.tree.tree_distance_source in {"body_hash", "ordered_tree_edit_distance"}
+            context.tree.tree_distance_source in EXACT_TREE_SOURCES
             and context.tree.tree_similarity >= STRUCTURAL_POLICY.tree_similarity_threshold
+            and left_features.body_skeleton == right_features.body_skeleton
+            and left_features.body_operators == right_features.body_operators
         ),
         literal_shapes_differ=left_features.literal_shapes != right_features.literal_shapes,
         call_multiset_differs=left_calls != right_calls,
         same_call_multiset=bool(left_calls and left_calls == right_calls),
         control_vector_differs=left_features.control_set != right_features.control_set,
+        shared_control_context=bool(
+            left_features.control_set and left_features.control_set == right_features.control_set
+        ),
         parameter_flow_match=(context.parameter_similarity >= PAIR_POLICY.parameter_flow_threshold),
         same_return_shape=bool(left_return and left_return == right_return),
         same_error_shape=bool(has_error_evidence(left_error) and left_error == right_error),
@@ -405,6 +408,11 @@ def relation_basis(
         shared_suffix_length=context.sequence.common_suffix_length,
         lcs_length=context.sequence.lcs_length,
     )
+
+
+def _same_statements_reordered(left: MemberFeatures, right: MemberFeatures) -> bool:
+    left_keys, right_keys = left.aligned_statements, right.aligned_statements
+    return bool(left_keys) and left_keys != right_keys and Counter(left_keys) == Counter(right_keys)
 
 
 def relation_labels(primary: RelationKind, basis: RelationBasis) -> list[RelationKind]:
@@ -446,12 +454,11 @@ def tree_edit_decision(
 ) -> TreeEditDecision:
     """Decide whether ordered tree edit distance is worth paying for.
 
-    Tree edit distance is a CPU-heavy confirmation signal, not the first
-    candidate generator. The gate uses already-extracted `MemberFeatures`
-    and cheap pair scores to reject pairs that cannot reach the relation
-    threshold, or to keep a proxy tree score when non-tree evidence is already
-    sufficient. Full edit distance is reserved for exact body hashes and pairs
-    where the tree result can materially affect classification or ranking.
+    Tree edit distance confirms candidates; it does not generate them. Pairs
+    that cannot reach the relation threshold even with identical trees are
+    rejected, and trees too large for the edit-product limit keep a proxy.
+    Every other pair is measured, so a pair's score never depends on which
+    pairs were compared before it.
     """
     if left.body_hash and left.body_hash == right.body_hash:
         return _tree_decision(compare=True, proxy=1.0, source="body_hash")
@@ -468,55 +475,7 @@ def tree_edit_decision(
             proxy=proxy,
             source=TREE_EDIT_PRODUCT_LIMIT_SOURCE,
         )
-    if not should_compare_tree_features(left, right):
-        return _tree_decision(
-            proxy=proxy,
-            source="tree_edit_skipped_size_limit",
-        )
-    cheap_relatedness = _relatedness_with_tree(cheap_scores, tree_similarity=proxy)
-    if cheap_relatedness >= PAIR_POLICY.relatedness_minimum and not _high_value_tree_pair(
-        left,
-        right,
-        cheap_scores,
-        has_argument_normalization=has_argument_normalization,
-    ):
-        return _tree_decision(
-            proxy=proxy,
-            source="tree_edit_skipped_cheap_evidence_sufficient",
-        )
-    return _tree_decision(compare=True, proxy=proxy, source="ordered_tree_edit_distance")
-
-
-def _high_value_tree_pair(
-    left: MemberFeatures,
-    right: MemberFeatures,
-    cheap_scores: SimilarityScores,
-    *,
-    has_argument_normalization: bool,
-) -> bool:
-    if has_argument_normalization:
-        return True
-    if left.statements and left.statements == right.statements:
-        return True
-    sequence_similarity = cheap_scores.sequence
-    if (
-        left.role == right.role
-        and cheap_scores.name >= TREE_EDIT_POLICY.name_threshold
-        and sequence_similarity > 0
-    ):
-        return True
-    if sequence_similarity >= TREE_EDIT_POLICY.sequence_threshold:
-        return True
-    if (
-        cheap_scores.call >= TREE_EDIT_POLICY.call_threshold
-        and sequence_similarity >= TREE_EDIT_POLICY.call_sequence_threshold
-    ):
-        return True
-    return (
-        cheap_scores.parameter >= PAIR_POLICY.parameter_flow_threshold
-        and cheap_scores.graph >= TREE_EDIT_POLICY.graph_threshold
-        and sequence_similarity >= TREE_EDIT_POLICY.graph_sequence_threshold
-    )
+    return _tree_decision(compare=True, proxy=proxy, source=ORDERED_TREE_EDIT_SOURCE)
 
 
 def _relatedness_with_tree(
@@ -540,16 +499,6 @@ def _tree_decision(
         proxy_tree_similarity=proxy,
         tree_distance_source=source,
     )
-
-
-def _tree_edit_budget_available(
-    stats: dict[str, int] | None,
-    budget: TreeEditBudget | None,
-) -> bool:
-    cluster_available = (
-        stats is None or stats.get("tree_edit_requested_count", 0) < TREE_EDIT_POLICY.cluster_budget
-    )
-    return cluster_available and (budget is None or budget.try_consume())
 
 
 @lru_cache(maxsize=4096)
@@ -611,7 +560,7 @@ def _has_wrapper_evidence(basis: RelationBasis) -> bool:
 def delta_kinds(
     left_features: MemberFeatures,
     right_features: MemberFeatures,
-    parameter_similarity: float,
+    parameter_mismatch: bool,
     normalization: ArgumentNormalization | None = None,
 ) -> tuple[DeltaKind, ...]:
     checks = [
@@ -644,10 +593,7 @@ def delta_kinds(
             (DeltaKind.EXTRA_TERMINAL_CALL,),
         ),
         (left_features.call_counts != right_features.call_counts, (DeltaKind.CALLEE_NAME,)),
-        (
-            parameter_similarity < PAIR_POLICY.parameter_flow_threshold,
-            (DeltaKind.ARGUMENT_FLOW,),
-        ),
+        (parameter_mismatch, (DeltaKind.ARGUMENT_FLOW,)),
         (left_features.control_set != right_features.control_set, (DeltaKind.CONTROL_FLOW,)),
         (
             _control_count(left_features, "TRY") != _control_count(right_features, "TRY"),
@@ -661,9 +607,16 @@ def delta_kinds(
             left_features.return_signature != right_features.return_signature,
             (DeltaKind.RETURN_VALUE,),
         ),
+        (_operator_changed(left_features, right_features), (DeltaKind.OPERATOR,)),
     ]
     deltas = [delta for condition, values in checks if condition for delta in values]
     return tuple(sorted(set(deltas), key=lambda delta: delta.value))
+
+
+def _operator_changed(left: MemberFeatures, right: MemberFeatures) -> bool:
+    if not left.body_tree or not right.body_tree or left.body_hash == right.body_hash:
+        return False
+    return operator_changed(left.body_tree, right.body_tree)
 
 
 def anti_unification_from_features(
@@ -674,6 +627,8 @@ def anti_unification_from_features(
     skeleton = anti_unify_sequences(
         list(left_features.statements),
         list(right_features.statements),
+        left_keys=list(left_features.aligned_statements),
+        right_keys=list(right_features.aligned_statements),
         left_id=left_features.member.binding_key,
         right_id=right_features.member.binding_key,
     )

@@ -42,7 +42,6 @@ class AssessmentGate(StrEnum):
 class EvidenceQuality(StrEnum):
     EXACT = "exact"
     STRUCTURAL = "structural"
-    PROXY = "proxy"
     SIGNATURE_ONLY = "signature_only"
 
 
@@ -87,12 +86,6 @@ class FindingTargetType(StrEnum):
     SIGNATURE_SHAPE = "file_module_concern"
 
 
-class FindingVisibility(StrEnum):
-    AGENT_SUMMARY = "agent_summary"
-    SUMMARY_GROUPED = "summary_grouped"
-    SIDECAR_ONLY = "sidecar_only"
-
-
 class RecommendationStatus(StrEnum):
     RECOMMENDED = "recommended"
     CAUTIOUS = "cautious"
@@ -130,7 +123,6 @@ __all__ = [
     "FindingActionStatus",
     "FindingReviewVisibility",
     "FindingTargetType",
-    "FindingVisibility",
     "REVIEW_TIER_ORDER",
     "REVIEW_TIERS",
     "RecommendationStatus",

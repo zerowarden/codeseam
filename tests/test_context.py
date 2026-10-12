@@ -175,6 +175,31 @@ def test_classification_for_tests_fixtures_and_generated_paths(
     assert classify_path(Path(path)).role == expected_role
 
 
+@pytest.mark.parametrize(
+    ("path", "role"),
+    [
+        ("packages/app/integration-tests/models/page.ts", "test"),
+        ("packages/server/src/utils/testing/apiUtils.ts", "test"),
+        ("src/test_payment.py", "test"),
+        ("app/contests.py", "source"),
+        ("api/spec/parser.py", "source"),
+        ("web/spec/parser.js", "test"),
+        ("src/spec.py", "source"),
+        ("src/coverage/report.py", "source"),
+        ("pkg/build/compile.py", "source"),
+        ("packages/ui/dist/index.js", "build_output"),
+    ],
+)
+def test_scan_roles_follow_shared_dirs_and_language_conventions(
+    tmp_path: Path, path: str, role: str
+) -> None:
+    write_atomic(tmp_path / path, "x = 1\n")
+
+    (record,) = _scan(tmp_path).records
+
+    assert record.role == role
+
+
 def test_file_selection_uses_language_specific_test_patterns(tmp_path: Path) -> None:
     for path in [
         "src/conftest.py",
@@ -345,7 +370,7 @@ def test_scan_manifest_rehashes_when_file_stat_changes(tmp_path: Path) -> None:
 
 def test_scan_manifest_invalid_payload_degrades_to_full_scan(tmp_path: Path) -> None:
     config = load_config(tmp_path)
-    manifest_path = scan_manifest_path(config.cache_path())
+    manifest_path = scan_manifest_path(config.cache_path)
     write_atomic(manifest_path, "{not json")
     write_atomic(tmp_path / "src" / "app.py", "def app():\n    return 1\n")
 
@@ -357,7 +382,7 @@ def test_scan_manifest_invalid_payload_degrades_to_full_scan(tmp_path: Path) -> 
 
 def _scan(root: Path) -> RepositoryScan:
     config = load_config(root)
-    paths = OutputPaths(config.path("output", "root"))
+    paths = OutputPaths(config.output_root)
     paths.ensure_audit()
     return scan_repository(config, paths, write_artifacts=True)
 

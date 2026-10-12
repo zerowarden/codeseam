@@ -36,9 +36,6 @@ from codeseam.cache.relations import (
     cached_relation_pairs,
     cached_tree_comparison_provider,
     relation_pair_cache_key,
-    relation_pair_group_cache_value,
-    relation_pair_ref_cache_key,
-    relation_pairs_from_group_cache_value,
     tree_comparison_features,
 )
 from codeseam.cache.repository import (
@@ -113,9 +110,6 @@ __all__ = [
     "repository_facts_cache_key",
     "relation_cache",
     "relation_pair_cache_key",
-    "relation_pair_group_cache_value",
-    "relation_pair_ref_cache_key",
-    "relation_pairs_from_group_cache_value",
     "signature_analyses_from_cache_values",
     "signature_analyses_from_records",
     "signature_core_cache_payload",

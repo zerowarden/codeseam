@@ -2,13 +2,28 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from codeseam.platform.errors import SourceChangedError
 from codeseam.platform.paths import basename
 
 GLOB_CHARS = frozenset("*?[")
 BINARY_PROBE_BYTES = 8192
+INCLUDE_ALL = ("**/*",)
+
+
+@dataclass(frozen=True, slots=True)
+class FileSelection:
+    """User include and exclude globs; built-in excludes are added by the scan."""
+
+    include: tuple[str, ...] = INCLUDE_ALL
+    exclude: tuple[str, ...] = ()
+
+    def payload(self) -> dict[str, list[str]]:
+        return {"include": list(self.include), "exclude": list(self.exclude)}
 
 
 def matches_any(path: str, patterns: list[str]) -> bool:
@@ -116,5 +131,43 @@ def sha256_bytes(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def verified_bytes(path: Path, content_hash: str) -> bytes:
+    """Read a file and check it still matches the hash the scan recorded.
+
+    Without this, a file edited between the scan and the parse would be
+    analysed as its new content but cached under its old hash, and reused if
+    the old content ever came back.
+    """
+
+    data = path.read_bytes()
+    if content_hash and sha256_bytes(data) != content_hash:
+        raise SourceChangedError(f"{path} changed after the repository scan")
+    return data
+
+
 def sha256_text(text: str, *, errors: str = "strict") -> str:
     return sha256_bytes(text.encode("utf-8", errors=errors))
+
+
+CONTENT_ID_HEX_LENGTH = 16
+
+
+def content_ids(prefix: str, keys: Sequence[Sequence[str]]) -> list[str]:
+    """Stable IDs from content keys, independent of what else is in the run.
+
+    Pass keys in location order: a key that repeats (two identical same-name
+    functions in one file) gets `-2`, `-3`, ... on its later occurrences.
+    """
+
+    seen: Counter[str] = Counter()
+    ids: list[str] = []
+    for key in keys:
+        digest = hashlib.sha256("\x1f".join(key).encode("utf-8", errors="surrogatepass"))
+        short = digest.hexdigest()[:CONTENT_ID_HEX_LENGTH]
+        seen[short] += 1
+        ids.append(f"{prefix}{short}" if seen[short] == 1 else f"{prefix}{short}-{seen[short]}")
+    return ids
+
+
+def qualified_symbol(symbol: str, container: str | None) -> str:
+    return f"{container}.{symbol}" if container else symbol

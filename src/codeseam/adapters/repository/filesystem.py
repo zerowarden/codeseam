@@ -5,9 +5,8 @@ import subprocess
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from codeseam.adapters.languages.tests_matcher import LanguageTestMatcher, test_matchers_for_repo
+from codeseam.adapters.languages.tests_matcher import TestPathMatcher, test_matchers_for_repo
 from codeseam.adapters.repository.scan_manifest import FileContentSummary, ScanManifest
 from codeseam.analysis import FileRecord, classify_path, detect_language, is_analysis_language
 from codeseam.platform import (
@@ -18,7 +17,7 @@ from codeseam.platform import (
     matches_any,
     sha256_bytes,
 )
-from codeseam.platform.files import BINARY_PROBE_BYTES
+from codeseam.platform.files import BINARY_PROBE_BYTES, FileSelection
 
 TOP_SKIPPED_GROUPS = 8
 GITIGNORE_GROUP = "gitignore"
@@ -78,12 +77,11 @@ class GitIgnoredPaths:
 
 def select_files(
     repo_root: Path,
-    selection_config: dict[str, Any],
+    selection: FileSelection,
     scan_manifest: ScanManifest | None = None,
 ) -> tuple[list[FileRecord], list[str]]:
-    includes = list(selection_config.get("include", ["**/*"]))
-    excludes = [*DEFAULT_EXCLUDES, *list(selection_config.get("exclude", []))]
-    include_matcher = GlobMatcher.from_patterns(includes)
+    excludes = [*DEFAULT_EXCLUDES, *selection.exclude]
+    include_matcher = GlobMatcher.from_patterns(list(selection.include))
     exclude_matcher = GlobMatcher.from_patterns(excludes)
     git_ignored = _git_ignored_paths(repo_root)
     test_matchers = test_matchers_for_repo(repo_root)
@@ -105,10 +103,10 @@ def select_files(
 
 def explain_file_selection(
     repo_root: Path,
-    selection_config: dict[str, Any],
+    selection: FileSelection,
 ) -> dict[str, object]:
-    includes = list(selection_config.get("include", ["**/*"]))
-    excludes = [*DEFAULT_EXCLUDES, *list(selection_config.get("exclude", []))]
+    includes = list(selection.include)
+    excludes = [*DEFAULT_EXCLUDES, *selection.exclude]
     git_ignored = _git_ignored_paths(repo_root)
     analysed = 0
     skipped = 0
@@ -276,16 +274,12 @@ def _is_internal_symlink(path: Path, root: Path) -> bool:
 def _record_for(
     path: Path,
     relative: Path,
-    test_matchers: dict[str, LanguageTestMatcher],
+    test_matchers: dict[str, TestPathMatcher],
     scan_manifest: ScanManifest | None,
 ) -> FileRecord | None:
     rel = relative.as_posix()
     language = detect_language(relative)
-    language_tests = test_matchers.get(language)
-    classification = classify_path(
-        relative,
-        language_test_path=language_tests.matches_path if language_tests else None,
-    )
+    classification = classify_path(relative, language_test_path=test_matchers.get(language))
     if not is_analysis_language(language):
         stat = path.stat()
         return FileRecord(

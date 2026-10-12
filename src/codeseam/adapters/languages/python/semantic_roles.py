@@ -175,8 +175,6 @@ SIMPLE_FORWARDER_MAX_BODY_LINES = 5
 PYTHON_PATH_ROLE_OPTIONS = PathSemanticRoleOptions(
     generated_path_parts=("_cython",),
     generated_name_markers=("generated", "_cy.py"),
-    test_name_prefixes=("test_",),
-    test_name_suffixes=("_test.py", "_tests.py", "tests.py"),
 )
 
 
@@ -218,6 +216,9 @@ def classify_python_semantic_roles(
     if _abstract_or_interface_stub(node):
         roles.add(FunctionSemanticRole.ABSTRACT_OR_INTERFACE_STUB)
         reasons.append("stub bodies are interface evidence, not refactorable implementation")
+    if _trivial_body(node):
+        roles.add(FunctionSemanticRole.TRIVIAL_BODY)
+        reasons.append("a one-operation body cannot be shortened by a shared helper")
     if (forwarded_call := _simple_forwarder_call(node, body_line_count)) is not None:
         roles.add(FunctionSemanticRole.ADAPTER_FORWARDER)
         reasons.append("single-call delegation is usually API topology")
@@ -282,17 +283,15 @@ def _matches_decorator(name: str, known: frozenset[str]) -> bool:
 def _abstract_or_interface_stub(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     statements = _body_without_docstring(node.body)
     if len(statements) != 1:
-        return False
+        return not statements  # docstring only: a hook spec or protocol declaration
     statement = statements[0]
-    if type(statement) is ast.Pass:
-        return True
     if type(statement) is ast.Expr and type(statement.value) is ast.Constant:
         return statement.value.value is Ellipsis
     if type(statement) is ast.Raise:
         return _raises_not_implemented(statement)
     if type(statement) is ast.Return:
         return type(statement.value) is ast.Name and statement.value.id == "NotImplemented"
-    return False
+    return type(statement) is ast.Pass
 
 
 def _body_without_docstring(statements: list[ast.stmt]) -> list[ast.stmt]:
@@ -304,6 +303,44 @@ def _body_without_docstring(statements: list[ast.stmt]) -> list[ast.stmt]:
     ):
         return statements[1:]
     return statements
+
+
+def _trivial_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """One operation: return or evaluate a constant or a read, store a read, or
+    make one call on reads. Operators, nested calls and templates encode a rule."""
+
+    statements = _body_without_docstring(node.body)
+    if len(statements) != 1:
+        return not statements
+    statement = statements[0]
+    if type(statement) is ast.Pass:
+        return True
+    if type(statement) is ast.Assign:
+        return all(_is_read(target) for target in statement.targets) and _is_operand(
+            statement.value
+        )
+    if type(statement) is ast.Return or type(statement) is ast.Expr:
+        value = _unwrap_await(statement.value)
+        if type(value) is ast.Call:
+            return _is_read(value.func) and all(
+                _is_operand(arg) for arg in (*value.args, *(item.value for item in value.keywords))
+            )
+        return value is None or _is_operand(value)
+    return False
+
+
+def _is_operand(node: ast.AST) -> bool:
+    if type(node) is ast.Starred:
+        node = node.value
+    return type(node) is ast.Constant or _is_read(node)
+
+
+def _is_read(node: ast.AST) -> bool:
+    while type(node) is ast.Attribute or type(node) is ast.Subscript:
+        if type(node) is ast.Subscript and not _is_operand(node.slice):
+            return False
+        node = node.value
+    return type(node) is ast.Name
 
 
 def _raises_not_implemented(statement: ast.Raise) -> bool:

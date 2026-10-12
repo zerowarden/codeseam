@@ -6,7 +6,7 @@ from codeseam.platform import Json, identifier_tokens, plural_noun, single_line
 
 type EvidenceClass = Literal[
     "signature_shape",
-    "body_tree_similarity",
+    "body_structure_similarity",
     "statement_sequence_alignment",
     "control_context_similarity",
     "local_dataflow_similarity",
@@ -20,7 +20,7 @@ type EvidenceClass = Literal[
 
 REASON_PHRASES: dict[EvidenceClass, str] = {
     "signature_shape": "same signature shape",
-    "body_tree_similarity": "similar body tree",
+    "body_structure_similarity": "similar body structure",
     "statement_sequence_alignment": "same statement sequence",
     "control_context_similarity": "same control flow",
     "local_dataflow_similarity": "similar data flow",
@@ -33,7 +33,7 @@ REASON_PHRASES: dict[EvidenceClass, str] = {
 }
 REASON_PRIORITY: tuple[EvidenceClass, ...] = (
     "anti_unification_template",
-    "body_tree_similarity",
+    "body_structure_similarity",
     "local_dataflow_similarity",
     "control_context_similarity",
     "statement_sequence_alignment",
@@ -47,7 +47,7 @@ REASON_PRIORITY: tuple[EvidenceClass, ...] = (
 
 STRUCTURAL_CLONE_EVIDENCE = {
     "anti_unification_template",
-    "body_tree_similarity",
+    "body_structure_similarity",
     "statement_sequence_alignment",
     "structural_duplicate",
 }
@@ -72,7 +72,7 @@ def display_title(target: Json) -> str:
     evidence = _evidence_classes(target)
     symbols = _target_symbols(target)
     if "policy_constant_duplicate" in evidence:
-        return _symbol_title("Duplicated policy constant", symbols)
+        return str(target.get("title", "")) or _symbol_title("Duplicated policy constant", symbols)
     if "argument_normalization_wrapper" in evidence:
         return "Repeated argument normalization wrapper"
     if _is_clone_title_candidate(target, evidence):

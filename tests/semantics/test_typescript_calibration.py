@@ -20,10 +20,11 @@ from codeseam.semantics import (
     SemanticMode,
     SemanticProviderStatus,
     StdioSemanticProvider,
+    typescript_worker_script,
 )
 
 FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "typescript_calibration"
-WORKER = "tools/semantic-worker/typescript/src/main.mjs"
+WORKER = str(typescript_worker_script())
 
 
 @pytest.mark.parametrize("fixture", ["declaration_only", "public_api_reexport"])
@@ -63,6 +64,38 @@ def test_typescript_calibration_auto_without_provider_does_not_promote_edits(
         SemanticProviderStatus.DISABLED.value,
         SemanticProviderStatus.UNAVAILABLE.value,
     }
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_typescript_worker_runs_only_for_trusted_projects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    trusted: bool,
+) -> None:
+    if trusted and shutil.which("node") is None:
+        pytest.skip("Node is not installed")
+    payload = _analyze_fixture(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        "same_shape_same_import",
+        semantic_mode="project",
+        trusted=trusted,
+    )
+
+    semantics = payload["timings"]["semantics"]
+    assert semantics["request_count"] > 0
+    if not trusted:
+        assert semantics["answered_count"] == 0
+        assert semantics["caveats"] == ["semantic_provider_untrusted"]
+        return
+    assert semantics["answered_count"] == semantics["request_count"]
+    if "typescript_package_unavailable" in semantics["caveats"]:
+        pytest.skip("TypeScript package is not resolvable by Node")
+    assert semantics["compiler_available"] is True
+    assert semantics["typechecker_enabled"] is True
+    assert semantics["resolved_item_count"] > 0
 
 
 def test_typescript_calibration_overloads_bind_to_implementation(
@@ -119,15 +152,18 @@ def test_typescript_calibration_project_references_map_file_ownership(tmp_path: 
     assert result.items[0].ownership_ambiguous is False
 
 
-def _analyze_fixture(
+def _analyze_fixture(  # noqa: PLR0913
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     fixture: str,
     *,
     semantic_mode: str,
+    trusted: bool = False,
 ) -> dict[str, Any]:
     repo = _copy_fixture(tmp_path, fixture)
+    if trusted:
+        (repo / "codeseam.toml").write_text("[semantics]\ntrust_project_code = true\n")
     monkeypatch.chdir(repo)
     exit_code = cli.main(
         [

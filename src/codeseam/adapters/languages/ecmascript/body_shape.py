@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import blake2b
 
 from tree_sitter import Node
 
 from codeseam.adapters.languages.ecmascript.runtime import iter_named_nodes, node_text
 from codeseam.analysis import ParamIR
+from codeseam.analysis.signatures import MAX_TREE_DEPTH, OrderedTree
 from codeseam.platform import normalize_identifier, sha256_text
 
-BODY_SHAPE_SCHEMA = "ecmascript_body_shape_v1"
+BODY_SHAPE_SCHEMA = "ecmascript_body_shape_v2"
+STATEMENT_KEY_BYTES = 8
 IGNORED_NODE_TYPES = frozenset({"comment"})
+# Anonymous tokens that change behaviour: `a + b` vs `a - b`, `for in` vs `for of`,
+# `let` vs `const`. Named-child traversal alone would erase them.
+SYNTAX_DETAIL_FIELDS = ("operator", "kind")
 LOCAL_BINDING_TYPES = frozenset(
     {
         "variable_declarator",
@@ -42,6 +48,8 @@ class BodyShape:
     shape: str = ""
     shape_hash: str = ""
     node_count: int = 0
+    statement_keys: tuple[str, ...] = ()
+    statement_spans: tuple[tuple[int, int], ...] = ()
 
 
 def normalized_body_shape(
@@ -69,11 +77,50 @@ def normalized_body_shape(
     shape, node_count = writer.write(body_node)
     if not node_count:
         return BodyShape()
+    key_writer = _BodyShapeWriter(source, param_roles, local_roles, abstract_free=True)
     return BodyShape(
         shape=shape,
         shape_hash=sha256_text(f"{BODY_SHAPE_SCHEMA}\n{shape}"),
         node_count=node_count,
+        statement_keys=tuple(
+            blake2b(
+                key_writer.write(statement)[0].encode("utf-8", "surrogatepass"),
+                digest_size=STATEMENT_KEY_BYTES,
+            ).hexdigest()
+            for statement in body_statements(body_node)
+        ),
+        statement_spans=tuple(
+            (statement.start_point[0] + 1, statement.end_point[0] + 1)
+            for statement in body_statements(body_node)
+        ),
     )
+
+
+def body_tree(
+    source: bytes, body_node: Node | None, params: tuple[ParamIR, ...]
+) -> OrderedTree | None:
+    """Normalized body tree for tree-edit distance, labelled like the body shape.
+
+    Operators become `op:` leaves instead of label suffixes, so an operator change
+    is one relabel and stays visible to operator-delta checks.
+    """
+
+    if body_node is None:
+        return None
+    param_roles = parameter_roles(params)
+    writer = _BodyShapeWriter(source, param_roles, _local_roles(source, body_node, param_roles))
+    statements = [writer.tree(stmt) for stmt in body_statements(body_node)]
+    if any(statement is None for statement in statements):
+        return None
+    return OrderedTree("body", tuple(statement for statement in statements if statement))
+
+
+def body_statements(body_node: Node) -> list[Node]:
+    """Top-level statements; an arrow function's expression body is one statement."""
+
+    if body_node.type == "statement_block":
+        return [child for child in body_node.named_children if child.type not in IGNORED_NODE_TYPES]
+    return [body_node]
 
 
 def parameter_roles(params: tuple[ParamIR, ...]) -> dict[str, str]:
@@ -122,26 +169,51 @@ class _BodyShapeWriter:
     param_roles: dict[str, str]
     local_roles: dict[str, str]
     preserve_literals: bool = False
+    # Statement keys align at Type-2: free names outside call position collapse.
+    abstract_free: bool = False
 
     def write(self, node: Node) -> tuple[str, int]:
         tokens: list[str] = []
-        count = self._append(node, tokens)
+        count = 0
+        stack: list[Node | str] = [node]  # iterative: nesting depth is unbounded
+        while stack:
+            item = stack.pop()
+            if isinstance(item, str):
+                tokens.append(item)
+                continue
+            if item.type in IGNORED_NODE_TYPES:
+                continue
+            tokens.append(self._token(item))
+            count += 1
+            if children := _children(item):
+                tokens.append("(")
+                stack.append(")")
+                stack.extend(reversed(children))
         return " ".join(tokens), count
 
-    def _append(self, node: Node, tokens: list[str]) -> int:
-        if node.type in IGNORED_NODE_TYPES:
-            return 0
-        tokens.append(self._token(node))
-        count = 1
-        children = [child for child in node.named_children if child.type not in IGNORED_NODE_TYPES]
-        if children:
-            tokens.append("(")
-            for child in children:
-                count += self._append(child, tokens)
-            tokens.append(")")
-        return count
+    def tree(self, node: Node) -> OrderedTree | None:
+        """Iterative post-order build; None past `MAX_TREE_DEPTH`."""
 
-    def _token(self, node: Node) -> str:
+        built: dict[int, OrderedTree] = {}
+        stack: list[tuple[Node, int, bool]] = [(node, 0, False)]
+        while stack:
+            current, depth, expanded = stack.pop()
+            if depth > MAX_TREE_DEPTH:
+                return None
+            children = _children(current)
+            if not expanded:
+                stack.append((current, depth, True))
+                stack.extend((child, depth + 1, False) for child in reversed(children))
+                continue
+            items = [built.pop(child.id) for child in children]
+            if (operator := current.child_by_field_name("operator")) is not None:
+                items.insert(0, OrderedTree(f"op:{operator.type}"))
+            built[current.id] = OrderedTree(
+                self._token(current, detail_fields=("kind",)), tuple(items)
+            )
+        return built[node.id]
+
+    def _token(self, node: Node, detail_fields: tuple[str, ...] = SYNTAX_DETAIL_FIELDS) -> str:
         node_type = node.type
         if node_type == "identifier":
             return self._identifier_token(node)
@@ -156,6 +228,8 @@ class _BodyShapeWriter:
             token = self._literal_token("NUM", node)
         elif node_type in BOOLEAN_TYPES | NONE_TYPES:
             token = self._literal_token(node_type.upper(), node)
+        else:
+            token += _syntax_detail(node, detail_fields)
         return token
 
     def _identifier_token(self, node: Node) -> str:
@@ -164,6 +238,8 @@ class _BodyShapeWriter:
             return role
         if role := self.local_roles.get(text):
             return role
+        if self.abstract_free and not _is_callee(node):
+            return "ID"
         return f"ID:{normalize_identifier(text)}"
 
     def _literal_token(self, kind: str, node: Node) -> str:
@@ -172,8 +248,27 @@ class _BodyShapeWriter:
         return f"LIT:{kind}:{node_text(self.source, node) or ''}"
 
 
+def _children(node: Node) -> list[Node]:
+    return [child for child in node.named_children if child.type not in IGNORED_NODE_TYPES]
+
+
+def _is_callee(node: Node) -> bool:
+    parent = node.parent
+    if parent is None or parent.type not in {"call_expression", "new_expression"}:
+        return False
+    callee = parent.child_by_field_name("function") or parent.child_by_field_name("constructor")
+    return callee is not None and callee.id == node.id
+
+
+def _syntax_detail(node: Node, fields: tuple[str, ...]) -> str:
+    details = [
+        child.type for field in fields if (child := node.child_by_field_name(field)) is not None
+    ]
+    return f"[{' '.join(details)}]" if details else ""
+
+
 def _normalized_text(source: bytes, node: Node) -> str:
     return normalize_identifier(node_text(source, node) or node.type) or node.type
 
 
-__all__ = ["BodyShape", "normalized_body_shape", "parameter_roles"]
+__all__ = ["BodyShape", "body_statements", "body_tree", "normalized_body_shape", "parameter_roles"]
